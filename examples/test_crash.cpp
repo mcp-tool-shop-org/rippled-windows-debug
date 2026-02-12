@@ -3,7 +3,7 @@
  * @brief Test the crash handlers with various failure modes
  *
  * Build:
- *   cl /EHsc /Zi test_crash.cpp /link dbghelp.lib
+ *   cl /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib
  *
  * Run:
  *   test_crash.exe [mode]
@@ -14,51 +14,50 @@
  *   3 - null pointer dereference
  *   4 - abort()
  *   5 - stack overflow (recursive)
+ *   6 - demo mode (show Rich-style logging)
  */
 
 #include <iostream>
 #include <string>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 // Include the debug toolkit
 #include "../src/rippled_debug.h"
 
+void simulateWork(int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
 void testBadAlloc() {
-    DEBUG_SECTION_BEGIN("testBadAlloc");
-    DEBUG_LOG("Attempting to allocate impossibly large vector...");
+    DEBUG_SECTION("testBadAlloc");
+    DEBUG_INFO("Attempting to allocate impossibly large vector...");
 
     // Try to allocate way more memory than available
     std::vector<char> huge(SIZE_MAX / 2);
-
-    DEBUG_SECTION_END("testBadAlloc");
 }
 
 void testRuntimeError() {
-    DEBUG_SECTION_BEGIN("testRuntimeError");
-    DEBUG_LOG("Throwing std::runtime_error...");
+    DEBUG_SECTION("testRuntimeError");
+    DEBUG_INFO("Throwing std::runtime_error...");
 
     throw std::runtime_error("Test runtime error from rippled-windows-debug");
-
-    DEBUG_SECTION_END("testRuntimeError");
 }
 
 void testNullPointer() {
-    DEBUG_SECTION_BEGIN("testNullPointer");
-    DEBUG_LOG("Dereferencing null pointer...");
+    DEBUG_SECTION("testNullPointer");
+    DEBUG_WARN("About to dereference null pointer...");
 
     int* ptr = nullptr;
     *ptr = 42;  // SIGSEGV
-
-    DEBUG_SECTION_END("testNullPointer");
 }
 
 void testAbort() {
-    DEBUG_SECTION_BEGIN("testAbort");
-    DEBUG_LOG("Calling abort()...");
+    DEBUG_SECTION("testAbort");
+    DEBUG_ERROR("Calling abort()...");
 
     std::abort();
-
-    DEBUG_SECTION_END("testAbort");
 }
 
 void testStackOverflow(int depth = 0) {
@@ -72,6 +71,57 @@ void testStackOverflow(int depth = 0) {
     testStackOverflow(depth + 1);  // Infinite recursion
 }
 
+void demoRichLogging() {
+    DEBUG_BANNER("rippled-windows-debug", "Rich-style Terminal Logging Demo");
+
+    DEBUG_INFO("Starting demonstration of Rich-style logging...");
+    simulateWork(50);
+
+    DEBUG_LOG("This is a DEBUG level message");
+    DEBUG_INFO("This is an INFO level message");
+    DEBUG_WARN("This is a WARNING level message");
+    DEBUG_ERROR("This is an ERROR level message");
+    DEBUG_CRITICAL("This is a CRITICAL level message");
+
+    simulateWork(50);
+
+    {
+        DEBUG_SECTION("database_init");
+        DEBUG_INFO("Connecting to database...");
+        simulateWork(100);
+        DEBUG_INFO("Loading schema...");
+        simulateWork(50);
+        DEBUG_INFO("Connection established");
+    }
+
+    {
+        DEBUG_SECTION("rpc_startup");
+        DEBUG_INFO("Initializing RPC handlers...");
+        simulateWork(75);
+
+        {
+            DEBUG_SECTION("json_context");
+            DEBUG_LOG("Creating JSON context...");
+            simulateWork(25);
+            DEBUG_LOG("Registering methods...");
+            simulateWork(25);
+        }
+
+        DEBUG_INFO("RPC system ready");
+    }
+
+    {
+        DEBUG_SECTION("network_init");
+        DEBUG_INFO("Starting peer connections...");
+        simulateWork(150);
+        DEBUG_WARN("Peer 192.168.1.50 slow to respond");
+        simulateWork(50);
+        DEBUG_INFO("Connected to 5 peers");
+    }
+
+    DEBUG_INFO("All systems initialized successfully!");
+}
+
 void printUsage() {
     std::cout << "\nrippled-windows-debug crash test\n";
     std::cout << "================================\n\n";
@@ -82,6 +132,7 @@ void printUsage() {
     std::cout << "  3 - null pointer dereference (SIGSEGV)\n";
     std::cout << "  4 - abort() call (SIGABRT)\n";
     std::cout << "  5 - stack overflow\n";
+    std::cout << "  6 - demo mode (show Rich-style logging)\n";
     std::cout << "\n";
 }
 
@@ -95,6 +146,12 @@ int main(int argc, char* argv[]) {
     }
 
     int mode = std::stoi(argv[1]);
+
+    if (mode == 6) {
+        // Demo mode - just show the logging
+        demoRichLogging();
+        return 0;
+    }
 
     std::cout << "\nRunning crash test mode " << mode << "...\n";
     std::cout << "You should see verbose crash diagnostics below.\n\n";

@@ -1,25 +1,27 @@
 /**
  * @file debug_log.h
- * @brief Debug logging macros for tracking execution flow
+ * @brief Rich-style terminal logging for Windows debugging
  *
- * Provides structured logging for debugging rippled on Windows.
- * Inspired by FlexiFlow's correlation ID and structured logging patterns.
+ * Provides beautiful, structured logging inspired by Python's Rich library.
+ * Features colored output, box-drawing characters, and aligned columns.
  *
  * Features:
- * - Correlation IDs for tracking related log entries across threads
+ * - Rich-style colored log levels (INFO=cyan, WARN=yellow, ERROR=red)
+ * - Box-drawing characters for sections
+ * - Correlation IDs for tracking related log entries
+ * - Multiple output formats (Rich, JSON)
  * - Thread-safe logging
- * - Multiple output formats (text, JSON)
- * - Section tracking for structured flow analysis
  *
  * Usage:
  *   DEBUG_SECTION_BEGIN("rpc_startup");
  *   DEBUG_LOG("Processing command: %s", cmd.c_str());
  *   DEBUG_SECTION_END("rpc_startup");
  *
- *   // With correlation ID:
- *   auto cid = DEBUG_CORRELATION_START("rpc_request");
- *   DEBUG_LOG_CID(cid, "Handling request");
- *   DEBUG_CORRELATION_END(cid);
+ * Output:
+ *   [12:34:56] INFO     Loading configuration...              config.cpp:42
+ *   ┌─────────────────────────────────────────────────────────────────────┐
+ *   │  rpc_startup                                                        │
+ *   └─────────────────────────────────────────────────────────────────────┘
  */
 
 #ifndef RIPPLED_WINDOWS_DEBUG_DEBUG_LOG_H
@@ -35,24 +37,68 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <ctime>
 
 namespace rippled_debug {
+
+// ============================================================================
+// ANSI Color Codes
+// ============================================================================
+
+namespace colors {
+    constexpr const char* RESET     = "\033[0m";
+    constexpr const char* BOLD      = "\033[1m";
+    constexpr const char* DIM       = "\033[2m";
+
+    // Log level colors (Rich-style)
+    constexpr const char* DEBUG     = "\033[38;5;244m";  // Gray
+    constexpr const char* INFO      = "\033[38;5;39m";   // Cyan/Blue
+    constexpr const char* WARN      = "\033[38;5;214m";  // Orange/Yellow
+    constexpr const char* ERROR     = "\033[38;5;196m";  // Red
+    constexpr const char* CRITICAL  = "\033[38;5;196m\033[1m";  // Bold Red
+
+    // Accent colors
+    constexpr const char* TIMESTAMP = "\033[38;5;242m";  // Dark gray
+    constexpr const char* LOCATION  = "\033[38;5;245m";  // Medium gray
+    constexpr const char* CID       = "\033[38;5;141m";  // Purple
+    constexpr const char* SECTION   = "\033[38;5;75m";   // Light blue
+    constexpr const char* SUCCESS   = "\033[38;5;82m";   // Green
+    constexpr const char* BOX       = "\033[38;5;240m";  // Dark gray for box chars
+}
+
+// Box-drawing characters (Unicode)
+namespace box {
+    constexpr const char* TL = "\u250C";  // ┌
+    constexpr const char* TR = "\u2510";  // ┐
+    constexpr const char* BL = "\u2514";  // └
+    constexpr const char* BR = "\u2518";  // ┘
+    constexpr const char* H  = "\u2500";  // ─
+    constexpr const char* V  = "\u2502";  // │
+    constexpr const char* ARROW_R = "\u25B6";  // ▶
+    constexpr const char* ARROW_D = "\u25BC";  // ▼
+    constexpr const char* CHECK   = "\u2714";  // ✔
+    constexpr const char* CROSS   = "\u2718";  // ✘
+    constexpr const char* BULLET  = "\u2022";  // •
+}
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
 enum class LogFormat {
-    TEXT,   // Human-readable text format
-    JSON    // Machine-parseable JSON format
+    RICH,   // Rich-style colored output (default)
+    TEXT,   // Plain text (no colors)
+    JSON    // Machine-parseable JSON
 };
 
 struct LogConfig {
     bool enabled = true;
-    LogFormat format = LogFormat::TEXT;
+    LogFormat format = LogFormat::RICH;
     FILE* output = stderr;
-    bool includeThreadId = true;
+    bool includeThreadId = false;       // Off by default for cleaner output
     bool includeCorrelationId = true;
+    bool useColors = true;
+    int boxWidth = 70;
 };
 
 inline LogConfig& config() {
@@ -60,8 +106,25 @@ inline LogConfig& config() {
     return cfg;
 }
 
+// Enable Windows ANSI support
+inline void enableAnsiSupport() {
+    static bool initialized = false;
+    if (initialized) return;
+
+    HANDLE hOut = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD mode = 0;
+    if (GetConsoleMode(hOut, &mode)) {
+        SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+
+    // Set console to UTF-8
+    SetConsoleOutputCP(CP_UTF8);
+
+    initialized = true;
+}
+
 // ============================================================================
-// Correlation ID System (FlexiFlow-inspired)
+// Correlation ID System
 // ============================================================================
 
 using CorrelationId = uint64_t;
@@ -71,7 +134,6 @@ inline CorrelationId generateCorrelationId() {
     return ++counter;
 }
 
-// Thread-local correlation ID for automatic propagation
 inline CorrelationId& currentCorrelationId() {
     thread_local CorrelationId cid = 0;
     return cid;
@@ -90,8 +152,19 @@ inline void endCorrelation(CorrelationId cid) {
 }
 
 // ============================================================================
-// Timestamp and Thread ID
+// Time Utilities
 // ============================================================================
+
+inline std::string getTimeString() {
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_s(&timeinfo, &now);
+
+    char buffer[16];
+    snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d",
+        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    return std::string(buffer);
+}
 
 inline double getTimestampMs() {
     static LARGE_INTEGER frequency = {};
@@ -133,8 +206,31 @@ inline std::string escapeJson(const char* str) {
 }
 
 // ============================================================================
+// Filename extraction
+// ============================================================================
+
+inline const char* extractFilename(const char* path) {
+    const char* filename = path;
+    for (const char* p = path; *p; ++p) {
+        if (*p == '\\' || *p == '/') {
+            filename = p + 1;
+        }
+    }
+    return filename;
+}
+
+// ============================================================================
 // Core Logging Functions
 // ============================================================================
+
+inline const char* getLevelColor(const char* level) {
+    if (strcmp(level, "DEBUG") == 0) return colors::DEBUG;
+    if (strcmp(level, "INFO") == 0)  return colors::INFO;
+    if (strcmp(level, "WARN") == 0)  return colors::WARN;
+    if (strcmp(level, "ERROR") == 0) return colors::ERROR;
+    if (strcmp(level, "CRIT") == 0)  return colors::CRITICAL;
+    return colors::RESET;
+}
 
 inline void debugLogImpl(
     const char* level,
@@ -145,35 +241,49 @@ inline void debugLogImpl(
 ) {
     if (!config().enabled) return;
 
-    double timestamp = getTimestampMs();
-    DWORD threadId = getThreadId();
+    enableAnsiSupport();
+
+    const char* filename = extractFilename(file);
     CorrelationId effectiveCid = (cid != 0) ? cid : currentCorrelationId();
 
-    // Extract just the filename from path
-    const char* filename = file;
-    for (const char* p = file; *p; ++p) {
-        if (*p == '\\' || *p == '/') {
-            filename = p + 1;
-        }
-    }
-
     if (config().format == LogFormat::JSON) {
-        // JSON format for machine parsing
+        // JSON format
+        double timestamp = getTimestampMs();
         fprintf(config().output,
             "{\"ts\":%.3f,\"level\":\"%s\",\"tid\":%lu,\"cid\":%llu,\"file\":\"%s\",\"line\":%d,\"msg\":\"%s\"}\n",
-            timestamp, level, threadId, effectiveCid, escapeJson(filename).c_str(), line, escapeJson(message).c_str());
-    } else {
-        // Text format for human reading
-        if (config().includeCorrelationId && effectiveCid != 0) {
-            fprintf(config().output, "[%8.3f] [%5lu] [cid:%04llu] [%-5s] %s:%d: %s\n",
-                timestamp, threadId, effectiveCid, level, filename, line, message);
-        } else if (config().includeThreadId) {
-            fprintf(config().output, "[%8.3f] [%5lu] [%-5s] %s:%d: %s\n",
-                timestamp, threadId, level, filename, line, message);
-        } else {
-            fprintf(config().output, "[%8.3f] [%-5s] %s:%d: %s\n",
-                timestamp, level, filename, line, message);
-        }
+            timestamp, level, getThreadId(), effectiveCid,
+            escapeJson(filename).c_str(), line, escapeJson(message).c_str());
+    }
+    else if (config().format == LogFormat::RICH && config().useColors) {
+        // Rich-style colored output
+        // Format: [HH:MM:SS] LEVEL    Message                              file.cpp:123
+
+        std::string timeStr = getTimeString();
+        const char* levelColor = getLevelColor(level);
+
+        // Build location string
+        char location[64];
+        snprintf(location, sizeof(location), "%s:%d", filename, line);
+
+        // Calculate padding for right-aligned location
+        int msgLen = (int)strlen(message);
+        int locLen = (int)strlen(location);
+        int padding = config().boxWidth - msgLen - locLen - 25; // 25 = timestamp + level + spaces
+        if (padding < 2) padding = 2;
+
+        // Print with colors
+        fprintf(config().output, "%s[%s]%s %s%-8s%s %s%*s%s%s%s\n",
+            colors::TIMESTAMP, timeStr.c_str(), colors::RESET,
+            levelColor, level, colors::RESET,
+            message,
+            padding, "",
+            colors::LOCATION, location, colors::RESET);
+    }
+    else {
+        // Plain text format
+        std::string timeStr = getTimeString();
+        fprintf(config().output, "[%s] %-8s %s    %s:%d\n",
+            timeStr.c_str(), level, message, filename, line);
     }
 
     fflush(config().output);
@@ -204,46 +314,119 @@ inline void debugLogCid(CorrelationId cid, const char* level, const char* file, 
 }
 
 // ============================================================================
-// Section Tracking (with timing)
+// Section Tracking with Rich-style boxes
 // ============================================================================
+
+inline void printBox(const char* title, bool isStart) {
+    if (!config().enabled) return;
+
+    enableAnsiSupport();
+
+    int width = config().boxWidth;
+    int titleLen = (int)strlen(title);
+
+    if (config().format == LogFormat::RICH && config().useColors) {
+        if (isStart) {
+            // Top border: ┌─── title ────────────────────────────────────────┐
+            fprintf(config().output, "\n%s%s", colors::BOX, box::TL);
+            fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
+            fprintf(config().output, "%s%s %s%s%s ",
+                colors::SECTION, box::ARROW_R, colors::BOLD, title, colors::RESET);
+
+            int remaining = width - titleLen - 8;
+            for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+            fprintf(config().output, "%s%s%s\n", colors::BOX, box::TR, colors::RESET);
+        } else {
+            // Bottom border: └─── ✔ title (123.4ms) ──────────────────────────┘
+            fprintf(config().output, "%s%s", colors::BOX, box::BL);
+            fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
+            fprintf(config().output, "%s%s%s %s%s ",
+                colors::SUCCESS, box::CHECK, colors::RESET, title, colors::RESET);
+
+            int remaining = width - titleLen - 10;
+            for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+            fprintf(config().output, "%s%s%s\n\n", colors::BOX, box::BR, colors::RESET);
+        }
+    } else {
+        // Plain text fallback
+        if (isStart) {
+            fprintf(config().output, "\n+-- %s ", title);
+            for (int i = 0; i < width - titleLen - 6; i++) fprintf(config().output, "-");
+            fprintf(config().output, "+\n");
+        } else {
+            fprintf(config().output, "+-- [done] %s ", title);
+            for (int i = 0; i < width - titleLen - 14; i++) fprintf(config().output, "-");
+            fprintf(config().output, "+\n\n");
+        }
+    }
+
+    fflush(config().output);
+}
+
+inline void printBoxWithTime(const char* title, double elapsedMs) {
+    if (!config().enabled) return;
+
+    enableAnsiSupport();
+
+    int width = config().boxWidth;
+
+    if (config().format == LogFormat::RICH && config().useColors) {
+        // Bottom border: └─── ✔ title (123.4ms) ──────────────────────────┘
+        char timeStr[32];
+        snprintf(timeStr, sizeof(timeStr), "(%.1fms)", elapsedMs);
+        int titleLen = (int)strlen(title);
+        int timeLen = (int)strlen(timeStr);
+
+        fprintf(config().output, "%s%s", colors::BOX, box::BL);
+        fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
+        fprintf(config().output, "%s%s%s %s %s%s%s ",
+            colors::SUCCESS, box::CHECK, colors::RESET,
+            title,
+            colors::DIM, timeStr, colors::RESET);
+
+        int remaining = width - titleLen - timeLen - 12;
+        for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+        fprintf(config().output, "%s%s%s\n\n", colors::BOX, box::BR, colors::RESET);
+    } else {
+        fprintf(config().output, "+-- [done: %.1fms] %s ", elapsedMs, title);
+        int titleLen = (int)strlen(title);
+        for (int i = 0; i < width - titleLen - 22; i++) fprintf(config().output, "-");
+        fprintf(config().output, "+\n\n");
+    }
+
+    fflush(config().output);
+}
 
 struct SectionTimer {
     const char* name;
+    const char* file;
+    int line;
     double startTime;
     CorrelationId cid;
 
-    SectionTimer(const char* n, const char* file, int line)
-        : name(n), startTime(getTimestampMs()), cid(startCorrelation(n)) {
+    SectionTimer(const char* n, const char* f, int l)
+        : name(n), file(f), line(l), startTime(getTimestampMs()), cid(startCorrelation(n)) {
         if (!config().enabled) return;
 
         if (config().format == LogFormat::JSON) {
             debugLogImpl("ENTER", file, line, cid,
                 (std::string("section_start:") + name).c_str());
         } else {
-            fprintf(config().output, "\n");
-            fprintf(config().output, "[%8.3f] [%5lu] [cid:%04llu] =====> ENTERING [%s] <=====\n",
-                startTime, getThreadId(), cid, name);
-            fprintf(config().output, "[%8.3f] [%5lu] [cid:%04llu]        Location: %s:%d\n",
-                startTime, getThreadId(), cid, file, line);
-            fflush(config().output);
+            printBox(name, true);
         }
     }
 
     ~SectionTimer() {
         if (!config().enabled) return;
 
-        double endTime = getTimestampMs();
-        double elapsed = endTime - startTime;
+        double elapsed = getTimestampMs() - startTime;
 
         if (config().format == LogFormat::JSON) {
             char msg[256];
             snprintf(msg, sizeof(msg), "section_end:%s,elapsed_ms:%.3f", name, elapsed);
-            debugLogImpl("EXIT", "", 0, cid, msg);
+            debugLogImpl("EXIT", file, line, cid, msg);
         } else {
-            fprintf(config().output, "[%8.3f] [%5lu] [cid:%04llu] <===== EXITING [%s] (%.3f ms) =====>\n",
-                endTime, getThreadId(), cid, name, elapsed);
-            fprintf(config().output, "\n");
-            fflush(config().output);
+            printBoxWithTime(name, elapsed);
         }
 
         endCorrelation(cid);
@@ -266,13 +449,72 @@ inline void setLogOutput(FILE* output) {
     config().output = output;
 }
 
+inline void setUseColors(bool useColors) {
+    config().useColors = useColors;
+}
+
+inline void setBoxWidth(int width) {
+    config().boxWidth = width;
+}
+
+// Print a banner (useful for startup)
+inline void printBanner(const char* title, const char* subtitle = nullptr) {
+    if (!config().enabled) return;
+
+    enableAnsiSupport();
+
+    int width = config().boxWidth;
+    int titleLen = (int)strlen(title);
+    int subtitleLen = subtitle ? (int)strlen(subtitle) : 0;
+
+    if (config().format == LogFormat::RICH && config().useColors) {
+        // Top border
+        fprintf(config().output, "\n%s%s", colors::SECTION, box::TL);
+        for (int i = 0; i < width - 2; i++) fprintf(config().output, "%s", box::H);
+        fprintf(config().output, "%s%s\n", box::TR, colors::RESET);
+
+        // Title line
+        int padding = (width - 4 - titleLen) / 2;
+        fprintf(config().output, "%s%s%s", colors::SECTION, box::V, colors::RESET);
+        fprintf(config().output, "%*s%s%s%s%*s",
+            padding, "", colors::BOLD, title, colors::RESET,
+            width - 4 - padding - titleLen, "");
+        fprintf(config().output, "%s%s%s\n", colors::SECTION, box::V, colors::RESET);
+
+        // Subtitle line (if provided)
+        if (subtitle) {
+            int subPadding = (width - 4 - subtitleLen) / 2;
+            fprintf(config().output, "%s%s%s", colors::SECTION, box::V, colors::RESET);
+            fprintf(config().output, "%*s%s%s%s%*s",
+                subPadding, "", colors::DIM, subtitle, colors::RESET,
+                width - 4 - subPadding - subtitleLen, "");
+            fprintf(config().output, "%s%s%s\n", colors::SECTION, box::V, colors::RESET);
+        }
+
+        // Bottom border
+        fprintf(config().output, "%s%s", colors::SECTION, box::BL);
+        for (int i = 0; i < width - 2; i++) fprintf(config().output, "%s", box::H);
+        fprintf(config().output, "%s%s\n\n", box::BR, colors::RESET);
+    } else {
+        // Plain text
+        fprintf(config().output, "\n");
+        for (int i = 0; i < width; i++) fprintf(config().output, "=");
+        fprintf(config().output, "\n  %s\n", title);
+        if (subtitle) fprintf(config().output, "  %s\n", subtitle);
+        for (int i = 0; i < width; i++) fprintf(config().output, "=");
+        fprintf(config().output, "\n\n");
+    }
+
+    fflush(config().output);
+}
+
 } // namespace rippled_debug
 
 // ============================================================================
 // Convenience Macros
 // ============================================================================
 
-// Basic logging (auto-inherits correlation ID from thread context)
+// Basic logging (Rich-style)
 #define DEBUG_LOG(fmt, ...) \
     rippled_debug::debugLog("DEBUG", __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
@@ -285,11 +527,14 @@ inline void setLogOutput(FILE* output) {
 #define DEBUG_ERROR(fmt, ...) \
     rippled_debug::debugLog("ERROR", __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
+#define DEBUG_CRITICAL(fmt, ...) \
+    rippled_debug::debugLog("CRIT", __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+
 // Logging with explicit correlation ID
 #define DEBUG_LOG_CID(cid, fmt, ...) \
     rippled_debug::debugLogCid(cid, "DEBUG", __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
-// Section tracking with RAII (auto-timing)
+// Section tracking with RAII (auto-timing, Rich-style boxes)
 #define DEBUG_SECTION(name) \
     rippled_debug::SectionTimer _section_##__LINE__(name, __FILE__, __LINE__)
 
@@ -317,15 +562,25 @@ inline void setLogOutput(FILE* output) {
 #define DEBUG_STR(str) \
     DEBUG_LOG(#str " = \"%s\"", (str).c_str())
 
+// Banner for startup
+#define DEBUG_BANNER(title, subtitle) \
+    rippled_debug::printBanner(title, subtitle)
+
 // Configuration
 #define DEBUG_ENABLED(enabled) \
     rippled_debug::setDebugEnabled(enabled)
+
+#define DEBUG_FORMAT_RICH() \
+    rippled_debug::setLogFormat(rippled_debug::LogFormat::RICH)
 
 #define DEBUG_FORMAT_JSON() \
     rippled_debug::setLogFormat(rippled_debug::LogFormat::JSON)
 
 #define DEBUG_FORMAT_TEXT() \
     rippled_debug::setLogFormat(rippled_debug::LogFormat::TEXT)
+
+#define DEBUG_COLORS(enabled) \
+    rippled_debug::setUseColors(enabled)
 
 #else // !_WIN32
 
@@ -334,6 +589,7 @@ inline void setLogOutput(FILE* output) {
 #define DEBUG_INFO(fmt, ...) ((void)0)
 #define DEBUG_WARN(fmt, ...) ((void)0)
 #define DEBUG_ERROR(fmt, ...) ((void)0)
+#define DEBUG_CRITICAL(fmt, ...) ((void)0)
 #define DEBUG_LOG_CID(cid, fmt, ...) ((void)0)
 #define DEBUG_SECTION(name) ((void)0)
 #define DEBUG_SECTION_BEGIN(name) {
@@ -343,9 +599,12 @@ inline void setLogOutput(FILE* output) {
 #define DEBUG_VAR(var) ((void)0)
 #define DEBUG_PTR(ptr) ((void)0)
 #define DEBUG_STR(str) ((void)0)
+#define DEBUG_BANNER(title, subtitle) ((void)0)
 #define DEBUG_ENABLED(enabled) ((void)0)
+#define DEBUG_FORMAT_RICH() ((void)0)
 #define DEBUG_FORMAT_JSON() ((void)0)
 #define DEBUG_FORMAT_TEXT() ((void)0)
+#define DEBUG_COLORS(enabled) ((void)0)
 
 #endif // _WIN32
 

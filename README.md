@@ -4,6 +4,8 @@
 
 This toolkit provides verbose crash diagnostics for rippled on Windows, making it easier to identify and debug issues that are difficult to diagnose on the platform.
 
+![Rich-style logging demo](docs/rich-demo.png)
+
 ## The Problem
 
 Windows crashes often show misleading error codes:
@@ -25,14 +27,14 @@ Single-header crash diagnostics that capture:
 - Full stack trace with symbol resolution
 - Signal information (SIGABRT, SIGSEGV, etc.)
 
-### 2. Debug Logging Macros (`debug_log.h`)
+### 2. Rich-style Debug Logging (`debug_log.h`)
 
-Structured logging for tracking execution flow (inspired by [FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)):
+Beautiful terminal logging inspired by Python's [Rich](https://github.com/Textualize/rich) library:
+- **Colored log levels** - INFO (cyan), WARN (yellow), ERROR (red)
+- **Box-drawing characters** - Visual section boundaries with Unicode
+- **Automatic timing** - Sections show elapsed time on completion
 - **Correlation IDs** - Track related log entries across threads
-- **Multiple output formats** - Human-readable text or machine-parseable JSON
-- **Section tracking** - Automatic timing and nested scope support
-- **Thread-safe** - Safe for multi-threaded rippled operations
-- Variable state dumps
+- **Multiple formats** - Rich (colored), Text (plain), JSON (machine-parseable)
 
 ### 3. Minidump Generation (`minidump.h`)
 
@@ -74,6 +76,39 @@ int main() {
 
 ## Example Output
 
+### Rich-style Logging (default)
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    rippled-windows-debug                           │
+│               Rich-style Terminal Logging Demo                     │
+└────────────────────────────────────────────────────────────────────┘
+
+[14:32:15] INFO     Starting demonstration of Rich-style logging...   demo.cpp:42
+[14:32:15] DEBUG    This is a DEBUG level message                     demo.cpp:45
+[14:32:15] INFO     This is an INFO level message                     demo.cpp:46
+[14:32:15] WARN     This is a WARNING level message                   demo.cpp:47
+[14:32:15] ERROR    This is an ERROR level message                    demo.cpp:48
+[14:32:15] CRIT     This is a CRITICAL level message                  demo.cpp:49
+
+┌── ▶ database_init ──────────────────────────────────────────────────┐
+[14:32:15] INFO     Connecting to database...                         db.cpp:12
+[14:32:15] INFO     Loading schema...                                 db.cpp:15
+[14:32:15] INFO     Connection established                            db.cpp:18
+└── ✔ database_init (156.2ms) ────────────────────────────────────────┘
+
+┌── ▶ rpc_startup ────────────────────────────────────────────────────┐
+[14:32:15] INFO     Initializing RPC handlers...                      rpc.cpp:42
+  ┌── ▶ json_context ─────────────────────────────────────────────────┐
+  [14:32:15] DEBUG    Creating JSON context...                        json.cpp:8
+  [14:32:15] DEBUG    Registering methods...                          json.cpp:12
+  └── ✔ json_context (52.3ms) ────────────────────────────────────────┘
+[14:32:15] INFO     RPC system ready                                  rpc.cpp:58
+└── ✔ rpc_startup (128.7ms) ──────────────────────────────────────────┘
+```
+
+### Crash Handler Output
+
 When a crash occurs, you'll see:
 
 ```
@@ -82,6 +117,12 @@ When a crash occurs, you'll see:
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Exception type: class std::bad_alloc
 Exception message: bad allocation
+
+*** MEMORY ALLOCATION FAILURE ***
+This is likely due to:
+  - Insufficient system memory
+  - Allocating an impossibly large buffer
+  - Memory fragmentation
 
 ========== STACK TRACE ==========
 [0] 0x7ff7166539e1 printStackTrace (Main.cpp:64)
@@ -92,18 +133,8 @@ Exception message: bad allocation
 ========== END STACK TRACE ==========
 ```
 
-### Debug Logging Output
+### JSON format (for machine parsing)
 
-**Text format (default):**
-```
-[   0.123] [12345] [cid:0001] =====> ENTERING [rpc_startup] <=====
-[   0.123] [12345] [cid:0001]        Location: Application.cpp:156
-[   0.124] [12345] [cid:0001] [DEBUG] Application.cpp:160: Creating RPC context
-[   0.125] [12345] [cid:0001] [DEBUG] Application.cpp:165: Initializing handlers
-[   0.130] [12345] [cid:0001] <===== EXITING [rpc_startup] (7.234 ms) =====>
-```
-
-**JSON format (for machine parsing):**
 ```json
 {"ts":0.123,"level":"ENTER","tid":12345,"cid":1,"file":"Application.cpp","line":156,"msg":"section_start:rpc_startup"}
 {"ts":0.124,"level":"DEBUG","tid":12345,"cid":1,"file":"Application.cpp","line":160,"msg":"Creating RPC context"}
@@ -113,6 +144,49 @@ Exception message: bad allocation
 Enable JSON format with:
 ```cpp
 DEBUG_FORMAT_JSON();
+```
+
+## Usage
+
+### Basic Logging
+
+```cpp
+#include "rippled_debug.h"
+
+int main() {
+    RIPPLED_DEBUG_INIT();
+
+    DEBUG_INFO("Application starting...");
+    DEBUG_WARN("Configuration file not found, using defaults");
+    DEBUG_ERROR("Failed to connect to peer");
+
+    {
+        DEBUG_SECTION("initialization");
+        // ... code here ...
+        // Automatically logs timing when scope exits
+    }
+
+    return 0;
+}
+```
+
+### Configuration
+
+```cpp
+// Switch to plain text (no colors)
+DEBUG_FORMAT_TEXT();
+
+// Switch to JSON output
+DEBUG_FORMAT_JSON();
+
+// Back to Rich-style (default)
+DEBUG_FORMAT_RICH();
+
+// Disable colors (but keep box drawing)
+DEBUG_COLORS(false);
+
+// Disable all logging
+DEBUG_ENABLED(false);
 ```
 
 ## Building rippled with Debug Toolkit
@@ -155,6 +229,16 @@ if(MSVC)
 endif()
 ```
 
+## Demo
+
+Run the demo to see Rich-style logging in action:
+
+```batch
+cd examples
+cl /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib
+test_crash.exe 6
+```
+
 ## Common Windows Issues
 
 ### 1. `std::bad_alloc` appearing as `STATUS_STACK_BUFFER_OVERRUN`
@@ -193,12 +277,13 @@ endif()
 rippled-windows-debug/
 ├── src/
 │   ├── crash_handlers.h    # Verbose crash diagnostics
-│   ├── debug_log.h         # Debug logging macros
-│   └── minidump.h          # Minidump generation
+│   ├── debug_log.h         # Rich-style debug logging
+│   ├── minidump.h          # Minidump generation
+│   └── rippled_debug.h     # Single-include header
 ├── patches/
-│   └── main_cpp.patch      # Patch for Main.cpp
+│   └── rippled_main.patch  # Patch for Main.cpp
 ├── examples/
-│   └── test_crash.cpp      # Example usage
+│   └── test_crash.cpp      # Example usage + demo
 ├── docs/
 │   └── WINDOWS_DEBUGGING.md
 └── README.md
@@ -206,6 +291,7 @@ rippled-windows-debug/
 
 ## Related Tools
 
+- **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Python async engine with structured logging (inspired debug_log.h patterns)
 - **[build-governor](https://github.com/mcp-tool-shop-org/build-governor)** - Memory-aware build orchestrator for parallel compilation (prevents OOM during rippled builds)
 
 ## Contributing
