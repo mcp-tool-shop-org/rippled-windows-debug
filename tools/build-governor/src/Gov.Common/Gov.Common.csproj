@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- NuGet package metadata -->
+    <PackageId>Gov.Common</PackageId>
+    <Version>1.0.0</Version>
+    <Description>Windows memory metrics, OOM failure classification, and named-pipe client for Build Governor. Provides commit-charge monitoring, token-budget calculation, and process-level memory tracking.</Description>
+    <Authors>mcp-tool-shop</Authors>
+    <Company>MCP Tool Shop</Company>
+    <Copyright>Copyright (c) 2025-2026 MCP Tool Shop</Copyright>
+    <PackageProjectUrl>https://github.com/mcp-tool-shop-org/build-governor</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mcp-tool-shop-org/build-governor</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>windows;memory;metrics;oom;build;throttle;monitoring</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Gov.Protocol\Gov.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

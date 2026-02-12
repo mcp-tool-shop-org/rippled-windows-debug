@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Gov.Cli/Gov.Cli.csproj" />
+    <Project Path="src/Gov.Common/Gov.Common.csproj" />
+    <Project Path="src/Gov.Protocol/Gov.Protocol.csproj" />
+    <Project Path="src/Gov.Service/Gov.Service.csproj" />
+    <Project Path="src/Gov.Wrapper.CL/Gov.Wrapper.CL.csproj" />
+    <Project Path="src/Gov.Wrapper.Link/Gov.Wrapper.Link.csproj" />
+  </Folder>
+</Solution>

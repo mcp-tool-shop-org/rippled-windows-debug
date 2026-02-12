@@ -1,35 +1,70 @@
 # rippled-windows-debug
 
-**Windows debugging toolkit for rippled (XRPL validator node)**
+**Complete Windows debugging toolkit for rippled (XRPL validator node)**
 
-This toolkit provides verbose crash diagnostics for rippled on Windows, making it easier to identify and debug issues that are difficult to diagnose on the platform.
+This toolkit provides **automatic build protection** and **verbose crash diagnostics** for rippled on Windows - preventing and debugging the memory issues that plague parallel C++ builds.
 
 ![Rich-style logging demo](docs/rich-demo.png)
 
+## Quick Start
+
+```powershell
+# Clone the toolkit
+git clone https://github.com/mcp-tool-shop-org/rippled-windows-debug.git
+cd rippled-windows-debug
+
+# Set up automatic build protection (one-time, no admin required)
+.\scripts\setup-governor.ps1
+
+# Restart terminal, then build rippled safely
+cmake --build build --parallel 16  # Governor prevents OOM automatically
+```
+
 ## The Problem
 
-Windows crashes often show misleading error codes:
-- `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` - Often not actually stack corruption
-- `abort() has been called` - Hides the real exception
-- No stack traces in release builds
+Parallel C++ builds on Windows frequently fail due to memory exhaustion:
 
-**Example**: A `std::bad_alloc` (memory allocation failure) can appear as `STATUS_STACK_BUFFER_OVERRUN` because:
+1. **Build failures**: Each `cl.exe` can use 1-4 GB RAM. High `-j` values exhaust memory.
+2. **Misleading errors**: `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` is often actually `std::bad_alloc`
+3. **No diagnostics**: Silent `cl.exe` exits with code 1, no explanation
+4. **System freezes**: When commit charge hits 100%, Windows becomes unresponsive
+
+**Root cause**: A `std::bad_alloc` appears as `STATUS_STACK_BUFFER_OVERRUN` because:
 1. Exception not caught → `std::terminate()` called
 2. `terminate()` calls `abort()`
 3. MSVC's `/GS` security checks interpret this as buffer overrun
 
 ## What This Toolkit Provides
 
-### 1. Verbose Crash Handlers (`crash_handlers.h`)
+### 1. Build Governor (Automatic OOM Protection)
 
-Single-header crash diagnostics that capture:
-- Actual exception type and message
+**Prevents crashes before they happen.** Located in `tools/build-governor/`:
+
+- **Zero-config protection**: Wrappers auto-start governor on first build
+- **Adaptive throttling**: Monitors commit charge, slows builds when memory pressure rises
+- **Actionable diagnostics**: "Memory pressure detected, recommend -j4"
+- **Auto-shutdown**: Governor exits after 30 min idle
+
+```powershell
+# One-time setup
+.\scripts\setup-governor.ps1
+
+# All builds are now protected automatically
+cmake --build . --parallel 16
+msbuild /m:16
+ninja -j 8
+```
+
+### 2. Verbose Crash Handlers (`crash_handlers.h`)
+
+**Diagnoses crashes that do happen.** Single-header crash diagnostics that capture:
+- Actual exception type and message (reveals `std::bad_alloc` hidden as `STATUS_STACK_BUFFER_OVERRUN`)
 - Full stack trace with symbol resolution
 - Signal information (SIGABRT, SIGSEGV, etc.)
 - **Complete build info** (toolkit version, git commit, compiler)
 - **System info** (Windows version, CPU, memory, computer name)
 
-### 2. Rich-style Debug Logging (`debug_log.h`)
+### 3. Rich-style Debug Logging (`debug_log.h`)
 
 Beautiful terminal logging inspired by Python's [Rich](https://github.com/Textualize/rich) library:
 - **Colored log levels** - INFO (cyan), WARN (yellow), ERROR (red)
@@ -38,14 +73,14 @@ Beautiful terminal logging inspired by Python's [Rich](https://github.com/Textua
 - **Correlation IDs** - Track related log entries across threads
 - **Multiple formats** - Rich (colored), Text (plain), JSON (machine-parseable)
 
-### 3. Minidump Generation (`minidump.h`)
+### 4. Minidump Generation (`minidump.h`)
 
 Automatic crash dump capture:
 - Full memory dumps for debugging
 - Configurable dump location
 - Automatic cleanup of old dumps
 
-### 4. Build Information (`build_info.h`)
+### 5. Build Information (`build_info.h`)
 
 Comprehensive build and system info:
 - Toolkit version
@@ -56,9 +91,45 @@ Comprehensive build and system info:
 - CPU model and core count
 - System memory
 
-## Quick Start
+## How the Governor Works
 
-### Option 1: Patch rippled (Recommended for debugging)
+```
+  cmake --build . --parallel 16
+        │
+        ▼
+    ┌───────────┐
+    │  cl.exe   │ ← Actually the wrapper (in PATH)
+    │  wrapper  │
+    └─────┬─────┘
+          │
+          ▼
+  ┌───────────────────┐
+  │ Governor running? │
+  └─────────┬─────────┘
+       No   │   Yes
+            │
+     ┌──────┴──────┐
+     ▼             ▼
+  Auto-start    Connect
+  Governor      directly
+     │             │
+     └──────┬──────┘
+            ▼
+    Request tokens (based on commit charge)
+            │
+            ▼
+    Run real cl.exe
+            │
+            ▼
+    Release tokens
+```
+
+The governor monitors **commit charge** (not free RAM) because:
+- Commit charge = promised memory (even if not yet paged in)
+- When commit limit is reached, allocations fail immediately
+- Free RAM can be misleading (file cache, standby pages)
+
+## Patching rippled for Crash Diagnostics
 
 Apply the patch to `src/xrpld/app/main/Main.cpp`:
 
@@ -74,55 +145,9 @@ Apply the patch to `src/xrpld/app/main/Main.cpp`:
 #endif
 ```
 
-### Option 2: Standalone test wrapper
+## Example Crash Output
 
-```cpp
-#include "crash_handlers.h"
-
-int main() {
-    installVerboseCrashHandlers();
-
-    // Your test code here
-    // Any crash will now show full diagnostics
-}
-```
-
-## Example Output
-
-### Rich-style Logging (default)
-
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                    rippled-windows-debug                           │
-│               Rich-style Terminal Logging Demo                     │
-└────────────────────────────────────────────────────────────────────┘
-
-[14:32:15] INFO     Starting demonstration of Rich-style logging...   demo.cpp:42
-[14:32:15] DEBUG    This is a DEBUG level message                     demo.cpp:45
-[14:32:15] INFO     This is an INFO level message                     demo.cpp:46
-[14:32:15] WARN     This is a WARNING level message                   demo.cpp:47
-[14:32:15] ERROR    This is an ERROR level message                    demo.cpp:48
-[14:32:15] CRIT     This is a CRITICAL level message                  demo.cpp:49
-
-┌── ▶ database_init ──────────────────────────────────────────────────┐
-[14:32:15] INFO     Connecting to database...                         db.cpp:12
-[14:32:15] INFO     Loading schema...                                 db.cpp:15
-[14:32:15] INFO     Connection established                            db.cpp:18
-└── ✔ database_init (156.2ms) ────────────────────────────────────────┘
-
-┌── ▶ rpc_startup ────────────────────────────────────────────────────┐
-[14:32:15] INFO     Initializing RPC handlers...                      rpc.cpp:42
-  ┌── ▶ json_context ─────────────────────────────────────────────────┐
-  [14:32:15] DEBUG    Creating JSON context...                        json.cpp:8
-  [14:32:15] DEBUG    Registering methods...                          json.cpp:12
-  └── ✔ json_context (52.3ms) ────────────────────────────────────────┘
-[14:32:15] INFO     RPC system ready                                  rpc.cpp:58
-└── ✔ rpc_startup (128.7ms) ──────────────────────────────────────────┘
-```
-
-### Crash Handler Output
-
-When a crash occurs, you'll see a comprehensive report:
+When a crash occurs, you'll see a comprehensive report instead of cryptic error codes:
 
 ```
 ################################################################################
@@ -139,10 +164,7 @@ Built:            Feb 12 2024 14:30:00
 Compiler:         MSVC 1944
 Architecture:     x64 64-bit
 Windows:          Windows 11 (Build 10.0.22631)
-Edition:          Professional 23H2 (UBR: 2861)
 CPU:              AMD Ryzen 9 5900X 12-Core Processor
-Computer:         DESKTOP-ABC123
-User:             developer (Administrator)
 
 --- Exception Details ---
 Type:    std::bad_alloc
@@ -151,17 +173,12 @@ Message: bad allocation
 --- Diagnostic Hints ---
 MEMORY ALLOCATION FAILURE detected.
 Common causes:
-  1. Requesting impossibly large allocation (SIZE_MAX, negative size cast to size_t)
+  1. Requesting impossibly large allocation
   2. System out of memory (check Available Physical above)
   3. Memory fragmentation
 
 This often appears as STATUS_STACK_BUFFER_OVERRUN (0xC0000409) because:
   bad_alloc -> terminate() -> abort() -> /GS security check
-
---- Process Memory ---
-Working Set:        512 MB
-Peak Working Set:   1024 MB
-Private Bytes:      480 MB
 
 --- System Memory ---
 Total Physical:     32768 MB
@@ -171,75 +188,31 @@ Memory Load:        75%
 ========== STACK TRACE ==========
 [ 0] 0x00007ff716653901 printStackTrace (crash_handlers.h:142)
 [ 1] 0x00007ff716653d62 verboseTerminateHandler (crash_handlers.h:245)
-[ 2] 0x00007ff7179bfd57 terminate
-[ 3] 0x00007ff7179aef66 __scrt_unhandled_exception_filter
 ...
 ========== END STACK TRACE (12 frames) ==========
-
---- Loaded Modules (45 total, showing first 10) ---
-  rippled.exe                    @ 0x7ff716650000 (45678 KB)
-  ntdll.dll                      @ 0x7fff12340000 (1234 KB)
-  ...
 
 ################################################################################
 ###                         END CRASH REPORT                                 ###
 ################################################################################
 ```
 
-### JSON format (for machine parsing)
+## Rich-style Logging Example
 
-```json
-{"ts":0.123,"level":"ENTER","tid":12345,"cid":1,"file":"Application.cpp","line":156,"msg":"section_start:rpc_startup"}
-{"ts":0.124,"level":"DEBUG","tid":12345,"cid":1,"file":"Application.cpp","line":160,"msg":"Creating RPC context"}
-{"ts":0.130,"level":"EXIT","tid":12345,"cid":1,"file":"Application.cpp","line":0,"msg":"section_end:rpc_startup,elapsed_ms:7.234"}
 ```
+┌────────────────────────────────────────────────────────────────────┐
+│                    rippled-windows-debug                           │
+│               Rich-style Terminal Logging Demo                     │
+└────────────────────────────────────────────────────────────────────┘
 
-Enable JSON format with:
-```cpp
-DEBUG_FORMAT_JSON();
-```
+[14:32:15] INFO     Starting demonstration of Rich-style logging...   demo.cpp:42
+[14:32:15] DEBUG    This is a DEBUG level message                     demo.cpp:45
+[14:32:15] WARN     This is a WARNING level message                   demo.cpp:47
+[14:32:15] ERROR    This is an ERROR level message                    demo.cpp:48
 
-## Usage
-
-### Basic Logging
-
-```cpp
-#include "rippled_debug.h"
-
-int main() {
-    RIPPLED_DEBUG_INIT();
-
-    DEBUG_INFO("Application starting...");
-    DEBUG_WARN("Configuration file not found, using defaults");
-    DEBUG_ERROR("Failed to connect to peer");
-
-    {
-        DEBUG_SECTION("initialization");
-        // ... code here ...
-        // Automatically logs timing when scope exits
-    }
-
-    return 0;
-}
-```
-
-### Configuration
-
-```cpp
-// Switch to plain text (no colors)
-DEBUG_FORMAT_TEXT();
-
-// Switch to JSON output
-DEBUG_FORMAT_JSON();
-
-// Back to Rich-style (default)
-DEBUG_FORMAT_RICH();
-
-// Disable colors (but keep box drawing)
-DEBUG_COLORS(false);
-
-// Disable all logging
-DEBUG_ENABLED(false);
+┌── ▶ database_init ──────────────────────────────────────────────────┐
+[14:32:15] INFO     Connecting to database...                         db.cpp:12
+[14:32:15] INFO     Connection established                            db.cpp:18
+└── ✔ database_init (156.2ms) ────────────────────────────────────────┘
 ```
 
 ## Building rippled with Debug Toolkit
@@ -247,6 +220,7 @@ DEBUG_ENABLED(false);
 ### Prerequisites
 
 - Visual Studio 2022 Build Tools (or full VS2022)
+- .NET 9.0 SDK (for Build Governor)
 - Conan 2.x
 - CMake 3.25+
 - Ninja
@@ -254,20 +228,23 @@ DEBUG_ENABLED(false);
 ### Build Steps
 
 ```batch
-REM Set up VS2022 environment
+REM 1. Set up automatic build protection first!
+powershell -ExecutionPolicy Bypass -File scripts\setup-governor.ps1
+
+REM 2. Set up VS2022 environment
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 
-REM Install dependencies
+REM 3. Install dependencies
 conan install . --output-folder=build --build=missing
 
-REM Configure with debug info in release
+REM 4. Configure with debug info in release
 cmake -G Ninja -B build ^
     -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
     -DCMAKE_TOOLCHAIN_FILE=build/generators/conan_toolchain.cmake ^
     -Dxrpld=ON
 
-REM Build
-cmake --build build
+REM 5. Build (governor automatically protects this!)
+cmake --build build --parallel 16
 ```
 
 ### Generating PDB files for Release builds
@@ -292,10 +269,6 @@ cd examples
 REM Basic build
 cl /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib shell32.lib
 
-REM Or with git info captured at build time
-for /f "tokens=*" %%i in ('..\scripts\get_git_info.bat') do set GIT_FLAGS=%%i
-cl %GIT_FLAGS% /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib shell32.lib
-
 REM Run demo
 test_crash.exe 6    REM Rich-style logging demo
 test_crash.exe 7    REM Show build & system info only
@@ -303,38 +276,6 @@ test_crash.exe 1    REM Trigger bad_alloc crash with full report
 ```
 
 **Note:** Use Windows Terminal or a terminal with VT/ANSI support for full color output.
-
-## Common Windows Issues
-
-### 1. `std::bad_alloc` appearing as `STATUS_STACK_BUFFER_OVERRUN`
-
-**Cause**: Unhandled exception → terminate → abort → /GS check
-
-**Solution**: Use this toolkit to see the real exception
-
-### 2. Missing symbols in stack traces
-
-**Cause**: No PDB files for release builds
-
-**Solution**: Build with `/Zi` and `/DEBUG` linker flag
-
-### 3. Crash during RPC handler construction
-
-**Cause**: Memory allocation failure in JsonContext
-
-**Solution**: Check system memory, investigate allocator behavior
-
-## Integration with CI/CD
-
-```yaml
-# GitHub Actions example
-- name: Build with debug toolkit
-  run: |
-    # Apply crash handler patch
-    # Build with RelWithDebInfo
-    # Run tests
-    # Upload crash dumps as artifacts if any
-```
 
 ## Files
 
@@ -346,10 +287,16 @@ rippled-windows-debug/
 │   ├── debug_log.h         # Rich-style debug logging
 │   ├── minidump.h          # Minidump generation
 │   └── rippled_debug.h     # Single-include header
+├── tools/
+│   └── build-governor/     # Automatic OOM protection
+│       ├── src/            # Governor source code
+│       ├── scripts/        # Setup scripts
+│       └── README.md       # Governor documentation
+├── scripts/
+│   ├── setup-governor.ps1  # One-command governor setup
+│   └── get_git_info.bat    # Batch script for git info
 ├── cmake/
 │   └── GitInfo.cmake       # CMake helper for git info
-├── scripts/
-│   └── get_git_info.bat    # Batch script for git info
 ├── patches/
 │   └── rippled_main.patch  # Patch for Main.cpp
 ├── examples/
@@ -359,33 +306,31 @@ rippled-windows-debug/
 └── README.md
 ```
 
+## Common Windows Issues
+
+### 1. `std::bad_alloc` appearing as `STATUS_STACK_BUFFER_OVERRUN`
+
+**Cause**: Unhandled exception → terminate → abort → /GS check
+
+**Solution**:
+1. **Prevent it**: Use Build Governor (`.\scripts\setup-governor.ps1`)
+2. **Diagnose it**: Use crash handlers to see the real exception
+
+### 2. Missing symbols in stack traces
+
+**Cause**: No PDB files for release builds
+
+**Solution**: Build with `/Zi` and `/DEBUG` linker flag
+
+### 3. Build hangs or system freezes
+
+**Cause**: Too many parallel compilations exhausting commit charge
+
+**Solution**: Use Build Governor - it automatically throttles based on memory pressure
+
 ## Related Tools
 
 - **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Python async engine with structured logging (inspired debug_log.h patterns)
-- **[build-governor](https://github.com/mcp-tool-shop-org/build-governor)** - Memory-aware build orchestrator for parallel compilation (prevents OOM during rippled builds)
-
-### Preventing OOM During Builds
-
-rippled is a large C++ project. Parallel builds with high `-j` values can exhaust system memory, causing:
-- Silent `cl.exe` exits (code 1, no diagnostic)
-- System freezes
-- `std::bad_alloc` crashes that appear as `STATUS_STACK_BUFFER_OVERRUN`
-
-**build-governor** provides automatic protection:
-
-```powershell
-# One-time setup (no admin required)
-cd path/to/build-governor
-.\scripts\enable-autostart.ps1
-
-# Now all builds are automatically protected
-cmake --build build --parallel 16  # Governor throttles if memory is low
-```
-
-The governor monitors **commit charge** (not free RAM) and automatically:
-- Throttles parallel compilations when memory pressure rises
-- Provides actionable diagnostics: "Memory pressure detected, recommend -j4"
-- Auto-starts when builds begin, shuts down after 30 min idle
 
 ## Contributing
 
