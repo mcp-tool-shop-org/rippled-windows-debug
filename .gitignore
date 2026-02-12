@@ -1,0 +1,28 @@
+# Build artifacts
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.exp
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.vcxproj.user
+
+# CMake
+build/
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+
+# Conan
+conanbuildinfo.*
+conaninfo.txt
+graph_info.json
+
+# Crash dumps
+*.dmp
+CrashDumps/
