@@ -221,11 +221,34 @@ Memory Load:        75%
 
 - Visual Studio 2022 Build Tools (or full VS2022)
 - .NET 9.0 SDK (for Build Governor)
-- Conan 2.x
-- CMake 3.25+
-- Ninja
+- Python 3.x with Conan 2.x (`pip install conan`)
+- CMake 3.25+ (comes with Conan or install separately)
+- Ninja (comes with Conan or install separately)
 
-### Build Steps
+### Option 1: One-Command Build (Recommended)
+
+The toolkit includes a PowerShell script that handles everything:
+
+```powershell
+# In your rippled directory
+cd F:\rippled
+
+# Copy the build script from the toolkit
+copy F:\AI\rippled-windows-debug\scripts\build-rippled.ps1 .
+
+# Run the full build with governor protection
+powershell -ExecutionPolicy Bypass -File build-rippled.ps1 -Parallel 8
+```
+
+This script automatically:
+- Sets up VS2022 environment
+- Adds Python Scripts to PATH (for Conan)
+- Configures Build Governor wrappers
+- Runs Conan install
+- Configures CMake with Ninja
+- Builds with governor protection
+
+### Option 2: Manual Build Steps
 
 ```batch
 REM 1. Set up automatic build protection first!
