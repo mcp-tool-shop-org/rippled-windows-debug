@@ -46,24 +46,24 @@ namespace rippled_debug {
 // ============================================================================
 
 namespace colors {
-    constexpr const char* RESET     = "\033[0m";
-    constexpr const char* BOLD      = "\033[1m";
-    constexpr const char* DIM       = "\033[2m";
+    constexpr const char* RESET      = "\033[0m";
+    constexpr const char* BOLD       = "\033[1m";
+    constexpr const char* DIM        = "\033[2m";
 
     // Log level colors (Rich-style)
-    constexpr const char* DEBUG     = "\033[38;5;244m";  // Gray
-    constexpr const char* INFO      = "\033[38;5;39m";   // Cyan/Blue
-    constexpr const char* WARN      = "\033[38;5;214m";  // Orange/Yellow
-    constexpr const char* ERROR     = "\033[38;5;196m";  // Red
-    constexpr const char* CRITICAL  = "\033[38;5;196m\033[1m";  // Bold Red
+    constexpr const char* LVL_DEBUG    = "\033[38;5;244m";  // Gray
+    constexpr const char* LVL_INFO     = "\033[38;5;39m";   // Cyan/Blue
+    constexpr const char* LVL_WARN     = "\033[38;5;214m";  // Orange/Yellow
+    constexpr const char* LVL_ERROR    = "\033[38;5;196m";  // Red
+    constexpr const char* LVL_CRITICAL = "\033[38;5;196m\033[1m";  // Bold Red
 
     // Accent colors
-    constexpr const char* TIMESTAMP = "\033[38;5;242m";  // Dark gray
-    constexpr const char* LOCATION  = "\033[38;5;245m";  // Medium gray
-    constexpr const char* CID       = "\033[38;5;141m";  // Purple
-    constexpr const char* SECTION   = "\033[38;5;75m";   // Light blue
-    constexpr const char* SUCCESS   = "\033[38;5;82m";   // Green
-    constexpr const char* BOX       = "\033[38;5;240m";  // Dark gray for box chars
+    constexpr const char* TIMESTAMP  = "\033[38;5;242m";  // Dark gray
+    constexpr const char* LOCATION   = "\033[38;5;245m";  // Medium gray
+    constexpr const char* CID        = "\033[38;5;141m";  // Purple
+    constexpr const char* SECTION    = "\033[38;5;75m";   // Light blue
+    constexpr const char* SUCCESS    = "\033[38;5;82m";   // Green
+    constexpr const char* BOX_COLOR  = "\033[38;5;240m";  // Dark gray for box chars
 }
 
 // Box-drawing characters (Unicode)
@@ -224,11 +224,11 @@ inline const char* extractFilename(const char* path) {
 // ============================================================================
 
 inline const char* getLevelColor(const char* level) {
-    if (strcmp(level, "DEBUG") == 0) return colors::DEBUG;
-    if (strcmp(level, "INFO") == 0)  return colors::INFO;
-    if (strcmp(level, "WARN") == 0)  return colors::WARN;
-    if (strcmp(level, "ERROR") == 0) return colors::ERROR;
-    if (strcmp(level, "CRIT") == 0)  return colors::CRITICAL;
+    if (strcmp(level, "DEBUG") == 0) return colors::LVL_DEBUG;
+    if (strcmp(level, "INFO") == 0)  return colors::LVL_INFO;
+    if (strcmp(level, "WARN") == 0)  return colors::LVL_WARN;
+    if (strcmp(level, "ERROR") == 0) return colors::LVL_ERROR;
+    if (strcmp(level, "CRIT") == 0)  return colors::LVL_CRITICAL;
     return colors::RESET;
 }
 
@@ -328,24 +328,24 @@ inline void printBox(const char* title, bool isStart) {
     if (config().format == LogFormat::RICH && config().useColors) {
         if (isStart) {
             // Top border: ┌─── title ────────────────────────────────────────┐
-            fprintf(config().output, "\n%s%s", colors::BOX, box::TL);
+            fprintf(config().output, "\n%s%s", colors::BOX_COLOR, box::TL);
             fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
             fprintf(config().output, "%s%s %s%s%s ",
                 colors::SECTION, box::ARROW_R, colors::BOLD, title, colors::RESET);
 
             int remaining = width - titleLen - 8;
             for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
-            fprintf(config().output, "%s%s%s\n", colors::BOX, box::TR, colors::RESET);
+            fprintf(config().output, "%s%s%s\n", colors::BOX_COLOR, box::TR, colors::RESET);
         } else {
             // Bottom border: └─── ✔ title (123.4ms) ──────────────────────────┘
-            fprintf(config().output, "%s%s", colors::BOX, box::BL);
+            fprintf(config().output, "%s%s", colors::BOX_COLOR, box::BL);
             fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
             fprintf(config().output, "%s%s%s %s%s ",
                 colors::SUCCESS, box::CHECK, colors::RESET, title, colors::RESET);
 
             int remaining = width - titleLen - 10;
             for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
-            fprintf(config().output, "%s%s%s\n\n", colors::BOX, box::BR, colors::RESET);
+            fprintf(config().output, "%s%s%s\n\n", colors::BOX_COLOR, box::BR, colors::RESET);
         }
     } else {
         // Plain text fallback
@@ -377,7 +377,7 @@ inline void printBoxWithTime(const char* title, double elapsedMs) {
         int titleLen = (int)strlen(title);
         int timeLen = (int)strlen(timeStr);
 
-        fprintf(config().output, "%s%s", colors::BOX, box::BL);
+        fprintf(config().output, "%s%s", colors::BOX_COLOR, box::BL);
         fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
         fprintf(config().output, "%s%s%s %s %s%s%s ",
             colors::SUCCESS, box::CHECK, colors::RESET,
@@ -386,7 +386,7 @@ inline void printBoxWithTime(const char* title, double elapsedMs) {
 
         int remaining = width - titleLen - timeLen - 12;
         for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
-        fprintf(config().output, "%s%s%s\n\n", colors::BOX, box::BR, colors::RESET);
+        fprintf(config().output, "%s%s%s\n\n", colors::BOX_COLOR, box::BR, colors::RESET);
     } else {
         fprintf(config().output, "+-- [done: %.1fms] %s ", elapsedMs, title);
         int titleLen = (int)strlen(title);

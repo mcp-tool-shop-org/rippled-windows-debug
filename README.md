@@ -235,9 +235,11 @@ Run the demo to see Rich-style logging in action:
 
 ```batch
 cd examples
-cl /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib
+cl /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib shell32.lib
 test_crash.exe 6
 ```
+
+**Note:** Use Windows Terminal or a terminal with VT/ANSI support for full color output.
 
 ## Common Windows Issues
 
