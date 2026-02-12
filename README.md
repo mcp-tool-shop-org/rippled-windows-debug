@@ -27,10 +27,12 @@ Single-header crash diagnostics that capture:
 
 ### 2. Debug Logging Macros (`debug_log.h`)
 
-Structured logging for tracking execution flow:
-- Section entry/exit markers
+Structured logging for tracking execution flow (inspired by [FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)):
+- **Correlation IDs** - Track related log entries across threads
+- **Multiple output formats** - Human-readable text or machine-parseable JSON
+- **Section tracking** - Automatic timing and nested scope support
+- **Thread-safe** - Safe for multi-threaded rippled operations
 - Variable state dumps
-- Timing information
 
 ### 3. Minidump Generation (`minidump.h`)
 
@@ -88,6 +90,29 @@ Exception message: bad allocation
 [3] 0x7ff7179aef66 __scrt_unhandled_exception_filter
 ...
 ========== END STACK TRACE ==========
+```
+
+### Debug Logging Output
+
+**Text format (default):**
+```
+[   0.123] [12345] [cid:0001] =====> ENTERING [rpc_startup] <=====
+[   0.123] [12345] [cid:0001]        Location: Application.cpp:156
+[   0.124] [12345] [cid:0001] [DEBUG] Application.cpp:160: Creating RPC context
+[   0.125] [12345] [cid:0001] [DEBUG] Application.cpp:165: Initializing handlers
+[   0.130] [12345] [cid:0001] <===== EXITING [rpc_startup] (7.234 ms) =====>
+```
+
+**JSON format (for machine parsing):**
+```json
+{"ts":0.123,"level":"ENTER","tid":12345,"cid":1,"file":"Application.cpp","line":156,"msg":"section_start:rpc_startup"}
+{"ts":0.124,"level":"DEBUG","tid":12345,"cid":1,"file":"Application.cpp","line":160,"msg":"Creating RPC context"}
+{"ts":0.130,"level":"EXIT","tid":12345,"cid":1,"file":"Application.cpp","line":0,"msg":"section_end:rpc_startup,elapsed_ms:7.234"}
+```
+
+Enable JSON format with:
+```cpp
+DEBUG_FORMAT_JSON();
 ```
 
 ## Building rippled with Debug Toolkit
