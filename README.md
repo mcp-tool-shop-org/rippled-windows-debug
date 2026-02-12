@@ -364,6 +364,29 @@ rippled-windows-debug/
 - **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Python async engine with structured logging (inspired debug_log.h patterns)
 - **[build-governor](https://github.com/mcp-tool-shop-org/build-governor)** - Memory-aware build orchestrator for parallel compilation (prevents OOM during rippled builds)
 
+### Preventing OOM During Builds
+
+rippled is a large C++ project. Parallel builds with high `-j` values can exhaust system memory, causing:
+- Silent `cl.exe` exits (code 1, no diagnostic)
+- System freezes
+- `std::bad_alloc` crashes that appear as `STATUS_STACK_BUFFER_OVERRUN`
+
+**build-governor** provides automatic protection:
+
+```powershell
+# One-time setup (no admin required)
+cd path/to/build-governor
+.\scripts\enable-autostart.ps1
+
+# Now all builds are automatically protected
+cmake --build build --parallel 16  # Governor throttles if memory is low
+```
+
+The governor monitors **commit charge** (not free RAM) and automatically:
+- Throttles parallel compilations when memory pressure rises
+- Provides actionable diagnostics: "Memory pressure detected, recommend -j4"
+- Auto-starts when builds begin, shuts down after 30 min idle
+
 ## Contributing
 
 This toolkit was developed while debugging issue [XRPLF/rippled#6293](https://github.com/XRPLF/rippled/issues/6293).
