@@ -5,6 +5,7 @@
  * Single-header crash handler that captures:
  * - Actual exception type and message (not just STATUS_STACK_BUFFER_OVERRUN)
  * - Full stack trace with symbol resolution
+ * - System context (memory, CPU, process info)
  * - Signal information
  *
  * Usage:
@@ -25,14 +26,124 @@
 
 #include <windows.h>
 #include <dbghelp.h>
+#include <psapi.h>
 #include <csignal>
 #include <iostream>
 #include <exception>
 #include <typeinfo>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "psapi.lib")
 
 namespace rippled_debug {
+
+// ============================================================================
+// System Information Gathering
+// ============================================================================
+
+/**
+ * Get current timestamp as string.
+ */
+inline std::string getCrashTimestamp() {
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_s(&timeinfo, &now);
+
+    char buffer[64];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    return std::string(buffer);
+}
+
+/**
+ * Get process memory usage information.
+ */
+inline void printMemoryInfo() {
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+        std::cerr << "\n--- Process Memory ---\n";
+        std::cerr << "Working Set:        " << (pmc.WorkingSetSize / 1024 / 1024) << " MB\n";
+        std::cerr << "Peak Working Set:   " << (pmc.PeakWorkingSetSize / 1024 / 1024) << " MB\n";
+        std::cerr << "Private Bytes:      " << (pmc.PrivateUsage / 1024 / 1024) << " MB\n";
+        std::cerr << "Page Faults:        " << pmc.PageFaultCount << "\n";
+    }
+
+    MEMORYSTATUSEX memStatus;
+    memStatus.dwLength = sizeof(memStatus);
+    if (GlobalMemoryStatusEx(&memStatus)) {
+        std::cerr << "\n--- System Memory ---\n";
+        std::cerr << "Total Physical:     " << (memStatus.ullTotalPhys / 1024 / 1024) << " MB\n";
+        std::cerr << "Available Physical: " << (memStatus.ullAvailPhys / 1024 / 1024) << " MB\n";
+        std::cerr << "Memory Load:        " << memStatus.dwMemoryLoad << "%\n";
+        std::cerr << "Total Virtual:      " << (memStatus.ullTotalVirtual / 1024 / 1024 / 1024) << " GB\n";
+        std::cerr << "Available Virtual:  " << (memStatus.ullAvailVirtual / 1024 / 1024 / 1024) << " GB\n";
+    }
+}
+
+/**
+ * Get loaded module information.
+ */
+inline void printModuleInfo() {
+    HMODULE modules[256];
+    DWORD cbNeeded;
+
+    if (EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &cbNeeded)) {
+        int count = cbNeeded / sizeof(HMODULE);
+        std::cerr << "\n--- Loaded Modules (" << count << " total, showing first 10) ---\n";
+
+        for (int i = 0; i < count && i < 10; i++) {
+            char moduleName[MAX_PATH];
+            if (GetModuleFileNameExA(GetCurrentProcess(), modules[i], moduleName, sizeof(moduleName))) {
+                // Extract just filename
+                const char* filename = moduleName;
+                for (const char* p = moduleName; *p; ++p) {
+                    if (*p == '\\' || *p == '/') filename = p + 1;
+                }
+
+                MODULEINFO modInfo;
+                if (GetModuleInformation(GetCurrentProcess(), modules[i], &modInfo, sizeof(modInfo))) {
+                    std::cerr << "  " << std::left << std::setw(30) << filename
+                              << " @ 0x" << std::hex << (uintptr_t)modInfo.lpBaseOfDll << std::dec
+                              << " (" << (modInfo.SizeOfImage / 1024) << " KB)\n";
+                }
+            }
+        }
+        if (count > 10) {
+            std::cerr << "  ... and " << (count - 10) << " more modules\n";
+        }
+    }
+}
+
+/**
+ * Get thread information.
+ */
+inline void printThreadInfo() {
+    std::cerr << "\n--- Thread Info ---\n";
+    std::cerr << "Current Thread ID:  " << GetCurrentThreadId() << "\n";
+    std::cerr << "Process ID:         " << GetCurrentProcessId() << "\n";
+
+    // Get thread count
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 te;
+        te.dwSize = sizeof(te);
+
+        int threadCount = 0;
+        DWORD pid = GetCurrentProcessId();
+
+        if (Thread32First(snapshot, &te)) {
+            do {
+                if (te.th32OwnerProcessID == pid) {
+                    threadCount++;
+                }
+            } while (Thread32Next(snapshot, &te));
+        }
+        CloseHandle(snapshot);
+        std::cerr << "Thread Count:       " << threadCount << "\n";
+    }
+}
 
 /**
  * Print stack trace to stderr using DbgHelp.
@@ -45,10 +156,11 @@ inline void printStackTrace()
     HANDLE process = GetCurrentProcess();
     HANDLE thread = GetCurrentThread();
 
-    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
     if (!SymInitialize(process, NULL, TRUE))
     {
-        std::cerr << "Failed to initialize symbols. Error: " << GetLastError() << "\n";
+        DWORD err = GetLastError();
+        std::cerr << "Failed to initialize symbols. Error: " << err << "\n";
         std::cerr << "Hint: Ensure PDB files are in the same directory as the executable.\n";
         return;
     }
@@ -96,6 +208,8 @@ inline void printStackTrace()
     line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 
     int frameNum = 0;
+    bool hasSymbols = false;
+
     while (StackWalk64(
         machineType,
         process,
@@ -111,28 +225,93 @@ inline void printStackTrace()
         DWORD64 displacement64 = 0;
         DWORD displacement = 0;
 
-        std::cerr << "[" << frameNum << "] 0x" << std::hex << address << std::dec << " ";
+        std::cerr << "[" << std::setw(2) << frameNum << "] 0x"
+                  << std::hex << std::setw(16) << std::setfill('0') << address
+                  << std::dec << std::setfill(' ') << " ";
 
         if (SymFromAddr(process, address, &displacement64, symbol))
         {
+            hasSymbols = true;
             std::cerr << symbol->Name;
 
             if (SymGetLineFromAddr64(process, address, &displacement, &line))
             {
-                std::cerr << " (" << line.FileName << ":" << line.LineNumber << ")";
+                // Extract just filename from path
+                const char* filename = line.FileName;
+                for (const char* p = line.FileName; *p; ++p) {
+                    if (*p == '\\' || *p == '/') filename = p + 1;
+                }
+                std::cerr << " (" << filename << ":" << line.LineNumber << ")";
             }
         }
         else
         {
-            std::cerr << "<unknown function>";
+            // Try to get module name at least
+            DWORD64 moduleBase = SymGetModuleBase64(process, address);
+            if (moduleBase) {
+                char moduleName[MAX_PATH];
+                if (GetModuleFileNameA((HMODULE)moduleBase, moduleName, sizeof(moduleName))) {
+                    const char* filename = moduleName;
+                    for (const char* p = moduleName; *p; ++p) {
+                        if (*p == '\\' || *p == '/') filename = p + 1;
+                    }
+                    std::cerr << "<" << filename << "+0x" << std::hex
+                              << (address - moduleBase) << std::dec << ">";
+                } else {
+                    std::cerr << "<unknown>";
+                }
+            } else {
+                std::cerr << "<unknown>";
+            }
         }
 
         std::cerr << "\n";
         frameNum++;
     }
 
-    std::cerr << "========== END STACK TRACE ==========\n\n";
+    if (!hasSymbols) {
+        std::cerr << "\n[!] No symbols resolved. For better stack traces:\n";
+        std::cerr << "    1. Build with /Zi (debug info)\n";
+        std::cerr << "    2. Keep PDB files with the executable\n";
+        std::cerr << "    3. Use RelWithDebInfo build type\n";
+    }
+
+    std::cerr << "========== END STACK TRACE (" << frameNum << " frames) ==========\n";
     SymCleanup(process);
+}
+
+/**
+ * Print diagnostic summary for common exceptions.
+ */
+inline void printExceptionDiagnostics(const char* exceptionType) {
+    std::cerr << "\n--- Diagnostic Hints ---\n";
+
+    if (strcmp(exceptionType, "std::bad_alloc") == 0) {
+        std::cerr << "MEMORY ALLOCATION FAILURE detected.\n";
+        std::cerr << "Common causes:\n";
+        std::cerr << "  1. Requesting impossibly large allocation (SIZE_MAX, negative size cast to size_t)\n";
+        std::cerr << "  2. System out of memory (check Available Physical above)\n";
+        std::cerr << "  3. Memory fragmentation (process can't find contiguous block)\n";
+        std::cerr << "  4. Memory leak exhausting address space\n";
+        std::cerr << "\n";
+        std::cerr << "This often appears as STATUS_STACK_BUFFER_OVERRUN (0xC0000409) because:\n";
+        std::cerr << "  bad_alloc -> terminate() -> abort() -> /GS security check\n";
+    }
+    else if (strstr(exceptionType, "runtime_error") || strstr(exceptionType, "logic_error")) {
+        std::cerr << "Standard library exception thrown but not caught.\n";
+        std::cerr << "Check the exception message above for details.\n";
+    }
+    else if (strstr(exceptionType, "out_of_range")) {
+        std::cerr << "OUT OF RANGE access detected.\n";
+        std::cerr << "Common causes:\n";
+        std::cerr << "  1. Vector/string index >= size()\n";
+        std::cerr << "  2. std::stoi/stol on invalid string\n";
+        std::cerr << "  3. map::at() with non-existent key\n";
+    }
+    else if (strstr(exceptionType, "invalid_argument")) {
+        std::cerr << "INVALID ARGUMENT passed to function.\n";
+        std::cerr << "Check function parameters in the stack trace.\n";
+    }
 }
 
 /**
@@ -141,9 +320,14 @@ inline void printStackTrace()
 inline void verboseTerminateHandler()
 {
     std::cerr << "\n";
-    std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-    std::cerr << "!!! VERBOSE CRASH HANDLER - terminate() called\n";
-    std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    std::cerr << "################################################################################\n";
+    std::cerr << "###                     VERBOSE CRASH HANDLER                                ###\n";
+    std::cerr << "###                      terminate() called                                  ###\n";
+    std::cerr << "################################################################################\n";
+    std::cerr << "\n";
+    std::cerr << "Timestamp: " << getCrashTimestamp() << "\n";
+
+    const char* exceptionType = "unknown";
 
     if (auto eptr = std::current_exception())
     {
@@ -153,30 +337,44 @@ inline void verboseTerminateHandler()
         }
         catch (const std::bad_alloc& e)
         {
-            std::cerr << "Exception type: std::bad_alloc\n";
-            std::cerr << "Exception message: " << e.what() << "\n";
-            std::cerr << "\n*** MEMORY ALLOCATION FAILURE ***\n";
-            std::cerr << "This often appears as STATUS_STACK_BUFFER_OVERRUN but is actually\n";
-            std::cerr << "a memory allocation failure. Check system memory and allocation sizes.\n";
+            exceptionType = "std::bad_alloc";
+            std::cerr << "\n--- Exception Details ---\n";
+            std::cerr << "Type:    std::bad_alloc\n";
+            std::cerr << "Message: " << e.what() << "\n";
         }
         catch (const std::exception& e)
         {
-            std::cerr << "Exception type: " << typeid(e).name() << "\n";
-            std::cerr << "Exception message: " << e.what() << "\n";
+            exceptionType = typeid(e).name();
+            std::cerr << "\n--- Exception Details ---\n";
+            std::cerr << "Type:    " << typeid(e).name() << "\n";
+            std::cerr << "Message: " << e.what() << "\n";
         }
         catch (...)
         {
-            std::cerr << "Unknown exception type\n";
+            std::cerr << "\n--- Exception Details ---\n";
+            std::cerr << "Type:    <unknown non-std::exception type>\n";
         }
     }
     else
     {
-        std::cerr << "No active exception - likely direct abort() call\n";
+        std::cerr << "\n--- Exception Details ---\n";
+        std::cerr << "No active exception - likely direct abort() or terminate() call.\n";
+        std::cerr << "Common causes:\n";
+        std::cerr << "  1. Assertion failure (assert() macro)\n";
+        std::cerr << "  2. Pure virtual function call\n";
+        std::cerr << "  3. Double free or heap corruption\n";
+        std::cerr << "  4. Stack buffer overrun detected by /GS\n";
     }
 
+    printExceptionDiagnostics(exceptionType);
+    printMemoryInfo();
+    printThreadInfo();
     printStackTrace();
+    printModuleInfo();
 
-    std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    std::cerr << "\n################################################################################\n";
+    std::cerr << "###                         END CRASH REPORT                                 ###\n";
+    std::cerr << "################################################################################\n";
     std::cerr.flush();
 
     // Call default handler to generate crash dump
@@ -189,34 +387,61 @@ inline void verboseTerminateHandler()
 inline void signalHandler(int signal)
 {
     std::cerr << "\n";
-    std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-    std::cerr << "!!! VERBOSE CRASH HANDLER - Signal " << signal << " received\n";
+    std::cerr << "################################################################################\n";
+    std::cerr << "###                     VERBOSE CRASH HANDLER                                ###\n";
+    std::cerr << "###                      Signal " << signal << " received                                  ###\n";
+    std::cerr << "################################################################################\n";
+    std::cerr << "\n";
+    std::cerr << "Timestamp: " << getCrashTimestamp() << "\n";
+    std::cerr << "\n--- Signal Details ---\n";
 
     switch(signal)
     {
         case SIGABRT:
-            std::cerr << "!!! Signal: SIGABRT (abort)\n";
-            std::cerr << "!!! This usually means an unhandled exception triggered terminate().\n";
+            std::cerr << "Signal:  SIGABRT (abnormal termination)\n";
+            std::cerr << "Meaning: abort() was called\n";
+            std::cerr << "Common causes:\n";
+            std::cerr << "  1. Unhandled exception -> terminate() -> abort()\n";
+            std::cerr << "  2. assert() failure\n";
+            std::cerr << "  3. Heap corruption detected\n";
+            std::cerr << "  4. /GS security check failure (buffer overrun)\n";
             break;
         case SIGSEGV:
-            std::cerr << "!!! Signal: SIGSEGV (segmentation fault)\n";
-            std::cerr << "!!! This means invalid memory access.\n";
+            std::cerr << "Signal:  SIGSEGV (segmentation fault)\n";
+            std::cerr << "Meaning: Invalid memory access\n";
+            std::cerr << "Common causes:\n";
+            std::cerr << "  1. Null pointer dereference\n";
+            std::cerr << "  2. Use after free\n";
+            std::cerr << "  3. Stack overflow\n";
+            std::cerr << "  4. Writing to read-only memory\n";
             break;
         case SIGFPE:
-            std::cerr << "!!! Signal: SIGFPE (floating point exception)\n";
+            std::cerr << "Signal:  SIGFPE (floating point exception)\n";
+            std::cerr << "Meaning: Arithmetic error\n";
+            std::cerr << "Common causes:\n";
+            std::cerr << "  1. Division by zero\n";
+            std::cerr << "  2. Integer overflow (with trapping enabled)\n";
             break;
         case SIGILL:
-            std::cerr << "!!! Signal: SIGILL (illegal instruction)\n";
+            std::cerr << "Signal:  SIGILL (illegal instruction)\n";
+            std::cerr << "Meaning: CPU encountered invalid opcode\n";
+            std::cerr << "Common causes:\n";
+            std::cerr << "  1. Corrupted code segment\n";
+            std::cerr << "  2. Jump to invalid address\n";
+            std::cerr << "  3. SSE/AVX instruction on unsupported CPU\n";
             break;
         default:
-            std::cerr << "!!! Signal: Unknown (" << signal << ")\n";
+            std::cerr << "Signal:  Unknown (" << signal << ")\n";
             break;
     }
-    std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
 
+    printMemoryInfo();
+    printThreadInfo();
     printStackTrace();
 
-    std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    std::cerr << "\n################################################################################\n";
+    std::cerr << "###                         END CRASH REPORT                                 ###\n";
+    std::cerr << "################################################################################\n";
     std::cerr.flush();
 
     // Reset and re-raise to get default behavior (crash dump)

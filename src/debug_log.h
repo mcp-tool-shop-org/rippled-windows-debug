@@ -8,6 +8,7 @@
  * Features:
  * - Rich-style colored log levels (INFO=cyan, WARN=yellow, ERROR=red)
  * - Box-drawing characters for sections
+ * - Delta timestamps showing time since last log
  * - Correlation IDs for tracking related log entries
  * - Multiple output formats (Rich, JSON)
  * - Thread-safe logging
@@ -18,10 +19,7 @@
  *   DEBUG_SECTION_END("rpc_startup");
  *
  * Output:
- *   [12:34:56] INFO     Loading configuration...              config.cpp:42
- *   ┌─────────────────────────────────────────────────────────────────────┐
- *   │  rpc_startup                                                        │
- *   └─────────────────────────────────────────────────────────────────────┘
+ *   [12:34:56.123] [+0.5ms] INFO     Loading config...          config.cpp:42
  */
 
 #ifndef RIPPLED_WINDOWS_DEBUG_DEBUG_LOG_H
@@ -30,6 +28,7 @@
 #ifdef _WIN32
 
 #include <windows.h>
+#include <psapi.h>
 #include <cstdio>
 #include <cstdarg>
 #include <cstdint>
@@ -38,6 +37,8 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
+
+#pragma comment(lib, "psapi.lib")
 
 namespace rippled_debug {
 
@@ -49,6 +50,8 @@ namespace colors {
     constexpr const char* RESET      = "\033[0m";
     constexpr const char* BOLD       = "\033[1m";
     constexpr const char* DIM        = "\033[2m";
+    constexpr const char* ITALIC     = "\033[3m";
+    constexpr const char* UNDERLINE  = "\033[4m";
 
     // Log level colors (Rich-style)
     constexpr const char* LVL_DEBUG    = "\033[38;5;244m";  // Gray
@@ -59,11 +62,14 @@ namespace colors {
 
     // Accent colors
     constexpr const char* TIMESTAMP  = "\033[38;5;242m";  // Dark gray
+    constexpr const char* DELTA      = "\033[38;5;240m";  // Darker gray for delta time
     constexpr const char* LOCATION   = "\033[38;5;245m";  // Medium gray
     constexpr const char* CID        = "\033[38;5;141m";  // Purple
     constexpr const char* SECTION    = "\033[38;5;75m";   // Light blue
     constexpr const char* SUCCESS    = "\033[38;5;82m";   // Green
     constexpr const char* BOX_COLOR  = "\033[38;5;240m";  // Dark gray for box chars
+    constexpr const char* MEMORY     = "\033[38;5;208m";  // Orange for memory
+    constexpr const char* NUMBER     = "\033[38;5;141m";  // Purple for numbers
 }
 
 // Box-drawing characters (Unicode)
@@ -79,6 +85,8 @@ namespace box {
     constexpr const char* CHECK   = "\u2714";  // ✔
     constexpr const char* CROSS   = "\u2718";  // ✘
     constexpr const char* BULLET  = "\u2022";  // •
+    constexpr const char* WARN_ICON = "\u26A0";  // ⚠
+    constexpr const char* INFO_ICON = "\u2139";  // ℹ
 }
 
 // ============================================================================
@@ -97,8 +105,11 @@ struct LogConfig {
     FILE* output = stderr;
     bool includeThreadId = false;       // Off by default for cleaner output
     bool includeCorrelationId = true;
+    bool includeDeltaTime = true;       // Show time since last log
+    bool includeMemoryDelta = false;    // Show memory change since last log
     bool useColors = true;
-    int boxWidth = 70;
+    bool useMilliseconds = true;        // Include ms in timestamp
+    int boxWidth = 76;
 };
 
 inline LogConfig& config() {
@@ -156,13 +167,17 @@ inline void endCorrelation(CorrelationId cid) {
 // ============================================================================
 
 inline std::string getTimeString() {
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    localtime_s(&timeinfo, &now);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
 
-    char buffer[16];
-    snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d",
-        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    char buffer[32];
+    if (config().useMilliseconds) {
+        snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d.%03d",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    } else {
+        snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d",
+            st.wHour, st.wMinute, st.wSecond);
+    }
     return std::string(buffer);
 }
 
@@ -182,8 +197,74 @@ inline double getTimestampMs() {
     return (double)(counter.QuadPart - startTime.QuadPart) / frequency.QuadPart * 1000.0;
 }
 
+// Track last log time for delta calculation
+inline double& lastLogTime() {
+    static double last = 0;
+    return last;
+}
+
+inline std::string formatDelta(double deltaMs) {
+    char buffer[16];
+    if (deltaMs < 1.0) {
+        snprintf(buffer, sizeof(buffer), "+%.0fus", deltaMs * 1000);
+    } else if (deltaMs < 1000.0) {
+        snprintf(buffer, sizeof(buffer), "+%.1fms", deltaMs);
+    } else if (deltaMs < 60000.0) {
+        snprintf(buffer, sizeof(buffer), "+%.2fs", deltaMs / 1000);
+    } else {
+        snprintf(buffer, sizeof(buffer), "+%.1fm", deltaMs / 60000);
+    }
+    return std::string(buffer);
+}
+
 inline DWORD getThreadId() {
     return GetCurrentThreadId();
+}
+
+// ============================================================================
+// Memory Tracking
+// ============================================================================
+
+inline size_t getCurrentMemoryUsage() {
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+        return pmc.WorkingSetSize;
+    }
+    return 0;
+}
+
+inline size_t& lastMemoryUsage() {
+    static size_t last = 0;
+    return last;
+}
+
+inline std::string formatMemoryDelta(size_t current, size_t last) {
+    if (last == 0) return "";
+
+    int64_t delta = (int64_t)current - (int64_t)last;
+    char buffer[32];
+
+    if (delta == 0) {
+        return "";
+    } else if (delta > 0) {
+        if (delta < 1024) {
+            snprintf(buffer, sizeof(buffer), " [+%lld B]", delta);
+        } else if (delta < 1024 * 1024) {
+            snprintf(buffer, sizeof(buffer), " [+%.1f KB]", delta / 1024.0);
+        } else {
+            snprintf(buffer, sizeof(buffer), " [+%.1f MB]", delta / 1024.0 / 1024.0);
+        }
+    } else {
+        delta = -delta;
+        if (delta < 1024) {
+            snprintf(buffer, sizeof(buffer), " [-%lld B]", delta);
+        } else if (delta < 1024 * 1024) {
+            snprintf(buffer, sizeof(buffer), " [-%.1f KB]", delta / 1024.0);
+        } else {
+            snprintf(buffer, sizeof(buffer), " [-%.1f MB]", delta / 1024.0 / 1024.0);
+        }
+    }
+    return std::string(buffer);
 }
 
 // ============================================================================
@@ -206,17 +287,32 @@ inline std::string escapeJson(const char* str) {
 }
 
 // ============================================================================
-// Filename extraction
+// Filename extraction (smart truncation)
 // ============================================================================
 
-inline const char* extractFilename(const char* path) {
+inline std::string extractFilename(const char* path, int maxLen = 20) {
     const char* filename = path;
     for (const char* p = path; *p; ++p) {
         if (*p == '\\' || *p == '/') {
             filename = p + 1;
         }
     }
-    return filename;
+
+    std::string result(filename);
+    if ((int)result.length() > maxLen && maxLen > 3) {
+        // Truncate with ellipsis, keeping the extension
+        size_t dotPos = result.rfind('.');
+        if (dotPos != std::string::npos && dotPos > 0) {
+            std::string ext = result.substr(dotPos);
+            int nameLen = maxLen - (int)ext.length() - 2; // -2 for ".."
+            if (nameLen > 0) {
+                result = result.substr(0, nameLen) + ".." + ext;
+            }
+        } else {
+            result = result.substr(0, maxLen - 2) + "..";
+        }
+    }
+    return result;
 }
 
 // ============================================================================
@@ -243,47 +339,94 @@ inline void debugLogImpl(
 
     enableAnsiSupport();
 
-    const char* filename = extractFilename(file);
+    double currentTime = getTimestampMs();
+    double deltaTime = currentTime - lastLogTime();
+    lastLogTime() = currentTime;
+
+    size_t currentMem = 0;
+    std::string memDelta;
+    if (config().includeMemoryDelta) {
+        currentMem = getCurrentMemoryUsage();
+        memDelta = formatMemoryDelta(currentMem, lastMemoryUsage());
+        lastMemoryUsage() = currentMem;
+    }
+
+    std::string filename = extractFilename(file);
     CorrelationId effectiveCid = (cid != 0) ? cid : currentCorrelationId();
 
     if (config().format == LogFormat::JSON) {
         // JSON format
-        double timestamp = getTimestampMs();
         fprintf(config().output,
-            "{\"ts\":%.3f,\"level\":\"%s\",\"tid\":%lu,\"cid\":%llu,\"file\":\"%s\",\"line\":%d,\"msg\":\"%s\"}\n",
-            timestamp, level, getThreadId(), effectiveCid,
-            escapeJson(filename).c_str(), line, escapeJson(message).c_str());
+            "{\"ts\":%.3f,\"delta\":%.3f,\"level\":\"%s\",\"tid\":%lu,\"cid\":%llu,"
+            "\"file\":\"%s\",\"line\":%d,\"msg\":\"%s\"",
+            currentTime, deltaTime, level, getThreadId(), effectiveCid,
+            escapeJson(filename.c_str()).c_str(), line, escapeJson(message).c_str());
+
+        if (config().includeMemoryDelta && currentMem > 0) {
+            fprintf(config().output, ",\"mem\":%zu", currentMem);
+        }
+        fprintf(config().output, "}\n");
     }
     else if (config().format == LogFormat::RICH && config().useColors) {
         // Rich-style colored output
-        // Format: [HH:MM:SS] LEVEL    Message                              file.cpp:123
+        // Format: [HH:MM:SS.mmm] [+delta] LEVEL    Message                  file.cpp:123
 
         std::string timeStr = getTimeString();
         const char* levelColor = getLevelColor(level);
 
         // Build location string
         char location[64];
-        snprintf(location, sizeof(location), "%s:%d", filename, line);
+        snprintf(location, sizeof(location), "%s:%d", filename.c_str(), line);
 
-        // Calculate padding for right-aligned location
-        int msgLen = (int)strlen(message);
-        int locLen = (int)strlen(location);
-        int padding = config().boxWidth - msgLen - locLen - 25; // 25 = timestamp + level + spaces
-        if (padding < 2) padding = 2;
+        // Build delta string
+        std::string deltaStr = config().includeDeltaTime ? formatDelta(deltaTime) : "";
 
-        // Print with colors
-        fprintf(config().output, "%s[%s]%s %s%-8s%s %s%*s%s%s%s\n",
-            colors::TIMESTAMP, timeStr.c_str(), colors::RESET,
-            levelColor, level, colors::RESET,
-            message,
-            padding, "",
-            colors::LOCATION, location, colors::RESET);
+        // Calculate base content length for padding
+        int baseLen = (int)timeStr.length() + 3;  // [time]
+        if (config().includeDeltaTime) baseLen += (int)deltaStr.length() + 3;  // [delta]
+        baseLen += 9;  // LEVEL + space
+        baseLen += (int)strlen(message);
+        baseLen += (int)strlen(location) + 2;
+
+        int padding = config().boxWidth - baseLen;
+        if (padding < 1) padding = 1;
+
+        // Print timestamp
+        fprintf(config().output, "%s[%s]%s ",
+            colors::TIMESTAMP, timeStr.c_str(), colors::RESET);
+
+        // Print delta time if enabled
+        if (config().includeDeltaTime) {
+            fprintf(config().output, "%s[%7s]%s ",
+                colors::DELTA, deltaStr.c_str(), colors::RESET);
+        }
+
+        // Print level
+        fprintf(config().output, "%s%-8s%s ", levelColor, level, colors::RESET);
+
+        // Print message
+        fprintf(config().output, "%s", message);
+
+        // Print memory delta if enabled
+        if (config().includeMemoryDelta && !memDelta.empty()) {
+            fprintf(config().output, "%s%s%s", colors::MEMORY, memDelta.c_str(), colors::RESET);
+        }
+
+        // Right-align location
+        fprintf(config().output, "%*s%s%s%s\n",
+            padding, "", colors::LOCATION, location, colors::RESET);
     }
     else {
         // Plain text format
         std::string timeStr = getTimeString();
-        fprintf(config().output, "[%s] %-8s %s    %s:%d\n",
-            timeStr.c_str(), level, message, filename, line);
+        std::string deltaStr = config().includeDeltaTime ? formatDelta(deltaTime) : "";
+
+        fprintf(config().output, "[%s]", timeStr.c_str());
+        if (config().includeDeltaTime) {
+            fprintf(config().output, " [%7s]", deltaStr.c_str());
+        }
+        fprintf(config().output, " %-8s %s    %s:%d\n",
+            level, message, filename.c_str(), line);
     }
 
     fflush(config().output);
@@ -317,7 +460,7 @@ inline void debugLogCid(CorrelationId cid, const char* level, const char* file, 
 // Section Tracking with Rich-style boxes
 // ============================================================================
 
-inline void printBox(const char* title, bool isStart) {
+inline void printBox(const char* title, bool isStart, const char* file = nullptr, int line = 0) {
     if (!config().enabled) return;
 
     enableAnsiSupport();
@@ -327,21 +470,35 @@ inline void printBox(const char* title, bool isStart) {
 
     if (config().format == LogFormat::RICH && config().useColors) {
         if (isStart) {
-            // Top border: ┌─── title ────────────────────────────────────────┐
+            // Top border: ┌── ▶ title ────────────────────── file.cpp:123 ──┐
             fprintf(config().output, "\n%s%s", colors::BOX_COLOR, box::TL);
             fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
-            fprintf(config().output, "%s%s %s%s%s ",
+            fprintf(config().output, "%s%s %s%s%s",
                 colors::SECTION, box::ARROW_R, colors::BOLD, title, colors::RESET);
 
-            int remaining = width - titleLen - 8;
-            for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+            // Add location if provided
+            if (file && line > 0) {
+                std::string filename = extractFilename(file);
+                char location[64];
+                snprintf(location, sizeof(location), "%s:%d", filename.c_str(), line);
+                int locLen = (int)strlen(location);
+
+                int remaining = width - titleLen - locLen - 12;
+                fprintf(config().output, " ");
+                for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+                fprintf(config().output, " %s%s%s ", colors::LOCATION, location, colors::RESET);
+            } else {
+                int remaining = width - titleLen - 8;
+                fprintf(config().output, " ");
+                for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+            }
             fprintf(config().output, "%s%s%s\n", colors::BOX_COLOR, box::TR, colors::RESET);
         } else {
-            // Bottom border: └─── ✔ title (123.4ms) ──────────────────────────┘
+            // Bottom border (without timing - use printBoxWithTime for that)
             fprintf(config().output, "%s%s", colors::BOX_COLOR, box::BL);
             fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
-            fprintf(config().output, "%s%s%s %s%s ",
-                colors::SUCCESS, box::CHECK, colors::RESET, title, colors::RESET);
+            fprintf(config().output, "%s%s%s %s ",
+                colors::SUCCESS, box::CHECK, colors::RESET, title);
 
             int remaining = width - titleLen - 10;
             for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
@@ -351,6 +508,10 @@ inline void printBox(const char* title, bool isStart) {
         // Plain text fallback
         if (isStart) {
             fprintf(config().output, "\n+-- %s ", title);
+            if (file && line > 0) {
+                std::string filename = extractFilename(file);
+                fprintf(config().output, "(%s:%d) ", filename.c_str(), line);
+            }
             for (int i = 0; i < width - titleLen - 6; i++) fprintf(config().output, "-");
             fprintf(config().output, "+\n");
         } else {
@@ -363,7 +524,7 @@ inline void printBox(const char* title, bool isStart) {
     fflush(config().output);
 }
 
-inline void printBoxWithTime(const char* title, double elapsedMs) {
+inline void printBoxWithTime(const char* title, double elapsedMs, size_t memDelta = 0) {
     if (!config().enabled) return;
 
     enableAnsiSupport();
@@ -371,24 +532,49 @@ inline void printBoxWithTime(const char* title, double elapsedMs) {
     int width = config().boxWidth;
 
     if (config().format == LogFormat::RICH && config().useColors) {
-        // Bottom border: └─── ✔ title (123.4ms) ──────────────────────────┘
+        // Format elapsed time nicely
         char timeStr[32];
-        snprintf(timeStr, sizeof(timeStr), "(%.1fms)", elapsedMs);
+        if (elapsedMs < 1.0) {
+            snprintf(timeStr, sizeof(timeStr), "%.0fus", elapsedMs * 1000);
+        } else if (elapsedMs < 1000.0) {
+            snprintf(timeStr, sizeof(timeStr), "%.1fms", elapsedMs);
+        } else {
+            snprintf(timeStr, sizeof(timeStr), "%.2fs", elapsedMs / 1000);
+        }
+
         int titleLen = (int)strlen(title);
         int timeLen = (int)strlen(timeStr);
 
+        // Bottom border: └── ✔ title (123.4ms) [+1.2 MB] ─────────────────┘
         fprintf(config().output, "%s%s", colors::BOX_COLOR, box::BL);
         fprintf(config().output, "%s%s%s ", colors::RESET, box::H, box::H);
-        fprintf(config().output, "%s%s%s %s %s%s%s ",
+        fprintf(config().output, "%s%s%s %s %s(%s)%s",
             colors::SUCCESS, box::CHECK, colors::RESET,
             title,
             colors::DIM, timeStr, colors::RESET);
 
-        int remaining = width - titleLen - timeLen - 12;
-        for (int i = 0; i < remaining; i++) fprintf(config().output, "%s", box::H);
+        int remaining = width - titleLen - timeLen - 14;
+
+        // Add memory delta if significant
+        if (memDelta > 1024) {
+            char memStr[32];
+            if (memDelta < 1024 * 1024) {
+                snprintf(memStr, sizeof(memStr), " [+%.1f KB]", memDelta / 1024.0);
+            } else {
+                snprintf(memStr, sizeof(memStr), " [+%.1f MB]", memDelta / 1024.0 / 1024.0);
+            }
+            fprintf(config().output, "%s%s%s", colors::MEMORY, memStr, colors::RESET);
+            remaining -= (int)strlen(memStr);
+        }
+
+        fprintf(config().output, " ");
+        for (int i = 0; i < remaining - 1; i++) fprintf(config().output, "%s", box::H);
         fprintf(config().output, "%s%s%s\n\n", colors::BOX_COLOR, box::BR, colors::RESET);
     } else {
-        fprintf(config().output, "+-- [done: %.1fms] %s ", elapsedMs, title);
+        fprintf(config().output, "+-- [done: %s] %s ",
+            (elapsedMs < 1000) ? (std::to_string((int)elapsedMs) + "ms").c_str()
+                               : (std::to_string(elapsedMs/1000) + "s").c_str(),
+            title);
         int titleLen = (int)strlen(title);
         for (int i = 0; i < width - titleLen - 22; i++) fprintf(config().output, "-");
         fprintf(config().output, "+\n\n");
@@ -402,17 +588,22 @@ struct SectionTimer {
     const char* file;
     int line;
     double startTime;
+    size_t startMem;
     CorrelationId cid;
 
     SectionTimer(const char* n, const char* f, int l)
-        : name(n), file(f), line(l), startTime(getTimestampMs()), cid(startCorrelation(n)) {
+        : name(n), file(f), line(l), startTime(getTimestampMs()),
+          startMem(getCurrentMemoryUsage()), cid(startCorrelation(n)) {
         if (!config().enabled) return;
+
+        // Update timing tracker
+        lastLogTime() = startTime;
 
         if (config().format == LogFormat::JSON) {
             debugLogImpl("ENTER", file, line, cid,
                 (std::string("section_start:") + name).c_str());
         } else {
-            printBox(name, true);
+            printBox(name, true, file, line);
         }
     }
 
@@ -420,13 +611,16 @@ struct SectionTimer {
         if (!config().enabled) return;
 
         double elapsed = getTimestampMs() - startTime;
+        size_t endMem = getCurrentMemoryUsage();
+        size_t memDelta = (endMem > startMem) ? (endMem - startMem) : 0;
 
         if (config().format == LogFormat::JSON) {
             char msg[256];
-            snprintf(msg, sizeof(msg), "section_end:%s,elapsed_ms:%.3f", name, elapsed);
+            snprintf(msg, sizeof(msg), "section_end:%s,elapsed_ms:%.3f,mem_delta:%zu",
+                name, elapsed, memDelta);
             debugLogImpl("EXIT", file, line, cid, msg);
         } else {
-            printBoxWithTime(name, elapsed);
+            printBoxWithTime(name, elapsed, memDelta);
         }
 
         endCorrelation(cid);
@@ -455,6 +649,14 @@ inline void setUseColors(bool useColors) {
 
 inline void setBoxWidth(int width) {
     config().boxWidth = width;
+}
+
+inline void setIncludeDeltaTime(bool include) {
+    config().includeDeltaTime = include;
+}
+
+inline void setIncludeMemoryDelta(bool include) {
+    config().includeMemoryDelta = include;
 }
 
 // Print a banner (useful for startup)
@@ -506,6 +708,22 @@ inline void printBanner(const char* title, const char* subtitle = nullptr) {
     }
 
     fflush(config().output);
+}
+
+// Print current memory status
+inline void printMemoryStatus(const char* label = "Memory") {
+    if (!config().enabled) return;
+
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "%s: Working=%lluMB Peak=%lluMB Private=%lluMB",
+            label,
+            (unsigned long long)(pmc.WorkingSetSize / 1024 / 1024),
+            (unsigned long long)(pmc.PeakWorkingSetSize / 1024 / 1024),
+            (unsigned long long)(pmc.PrivateUsage / 1024 / 1024));
+        debugLogImpl("INFO", __FILE__, __LINE__, 0, msg);
+    }
 }
 
 } // namespace rippled_debug
@@ -562,6 +780,13 @@ inline void printBanner(const char* title, const char* subtitle = nullptr) {
 #define DEBUG_STR(str) \
     DEBUG_LOG(#str " = \"%s\"", (str).c_str())
 
+// Memory status
+#define DEBUG_MEMORY() \
+    rippled_debug::printMemoryStatus()
+
+#define DEBUG_MEMORY_LABEL(label) \
+    rippled_debug::printMemoryStatus(label)
+
 // Banner for startup
 #define DEBUG_BANNER(title, subtitle) \
     rippled_debug::printBanner(title, subtitle)
@@ -582,6 +807,12 @@ inline void printBanner(const char* title, const char* subtitle = nullptr) {
 #define DEBUG_COLORS(enabled) \
     rippled_debug::setUseColors(enabled)
 
+#define DEBUG_DELTA_TIME(enabled) \
+    rippled_debug::setIncludeDeltaTime(enabled)
+
+#define DEBUG_MEMORY_TRACKING(enabled) \
+    rippled_debug::setIncludeMemoryDelta(enabled)
+
 #else // !_WIN32
 
 // No-op on non-Windows platforms
@@ -599,12 +830,16 @@ inline void printBanner(const char* title, const char* subtitle = nullptr) {
 #define DEBUG_VAR(var) ((void)0)
 #define DEBUG_PTR(ptr) ((void)0)
 #define DEBUG_STR(str) ((void)0)
+#define DEBUG_MEMORY() ((void)0)
+#define DEBUG_MEMORY_LABEL(label) ((void)0)
 #define DEBUG_BANNER(title, subtitle) ((void)0)
 #define DEBUG_ENABLED(enabled) ((void)0)
 #define DEBUG_FORMAT_RICH() ((void)0)
 #define DEBUG_FORMAT_JSON() ((void)0)
 #define DEBUG_FORMAT_TEXT() ((void)0)
 #define DEBUG_COLORS(enabled) ((void)0)
+#define DEBUG_DELTA_TIME(enabled) ((void)0)
+#define DEBUG_MEMORY_TRACKING(enabled) ((void)0)
 
 #endif // _WIN32
 
