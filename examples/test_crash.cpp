@@ -132,12 +132,17 @@ void printUsage() {
     std::cout << "  3 - null pointer dereference (SIGSEGV)\n";
     std::cout << "  4 - abort() call (SIGABRT)\n";
     std::cout << "  5 - stack overflow\n";
-    std::cout << "  6 - demo mode (show Rich-style logging)\n";
     std::cout << "\n";
 }
 
 int main(int argc, char* argv[]) {
-    // Initialize all debug handlers
+    if (argc >= 2 && std::string(argv[1]) == "7") {
+        // Mode 7: Just show build info without initializing handlers
+        PRINT_BUILD_INFO();
+        return 0;
+    }
+
+    // Initialize all debug handlers (prints full build info)
     RIPPLED_DEBUG_INIT();
 
     if (argc < 2) {

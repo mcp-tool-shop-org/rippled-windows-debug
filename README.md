@@ -26,6 +26,8 @@ Single-header crash diagnostics that capture:
 - Actual exception type and message
 - Full stack trace with symbol resolution
 - Signal information (SIGABRT, SIGSEGV, etc.)
+- **Complete build info** (toolkit version, git commit, compiler)
+- **System info** (Windows version, CPU, memory, computer name)
 
 ### 2. Rich-style Debug Logging (`debug_log.h`)
 
@@ -42,6 +44,17 @@ Automatic crash dump capture:
 - Full memory dumps for debugging
 - Configurable dump location
 - Automatic cleanup of old dumps
+
+### 4. Build Information (`build_info.h`)
+
+Comprehensive build and system info:
+- Toolkit version
+- Git commit hash, branch, dirty status
+- Compiler name and version
+- Build date/time and architecture
+- Windows version and build number
+- CPU model and core count
+- System memory
 
 ## Quick Start
 
@@ -109,28 +122,68 @@ int main() {
 
 ### Crash Handler Output
 
-When a crash occurs, you'll see:
+When a crash occurs, you'll see a comprehensive report:
 
 ```
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!! VERBOSE CRASH HANDLER - terminate() called
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Exception type: class std::bad_alloc
-Exception message: bad allocation
+################################################################################
+###                     VERBOSE CRASH HANDLER                                ###
+###                      terminate() called                                  ###
+################################################################################
 
-*** MEMORY ALLOCATION FAILURE ***
-This is likely due to:
-  - Insufficient system memory
-  - Allocating an impossibly large buffer
-  - Memory fragmentation
+Timestamp: 2024-02-12 14:32:15
+
+--- Build & System Info ---
+Toolkit:          rippled-windows-debug v1.1.0
+Git:              main @ a1b2c3d4e5f6 (dirty)
+Built:            Feb 12 2024 14:30:00
+Compiler:         MSVC 1944
+Architecture:     x64 64-bit
+Windows:          Windows 11 (Build 10.0.22631)
+Edition:          Professional 23H2 (UBR: 2861)
+CPU:              AMD Ryzen 9 5900X 12-Core Processor
+Computer:         DESKTOP-ABC123
+User:             developer (Administrator)
+
+--- Exception Details ---
+Type:    std::bad_alloc
+Message: bad allocation
+
+--- Diagnostic Hints ---
+MEMORY ALLOCATION FAILURE detected.
+Common causes:
+  1. Requesting impossibly large allocation (SIZE_MAX, negative size cast to size_t)
+  2. System out of memory (check Available Physical above)
+  3. Memory fragmentation
+
+This often appears as STATUS_STACK_BUFFER_OVERRUN (0xC0000409) because:
+  bad_alloc -> terminate() -> abort() -> /GS security check
+
+--- Process Memory ---
+Working Set:        512 MB
+Peak Working Set:   1024 MB
+Private Bytes:      480 MB
+
+--- System Memory ---
+Total Physical:     32768 MB
+Available Physical: 8192 MB
+Memory Load:        75%
 
 ========== STACK TRACE ==========
-[0] 0x7ff7166539e1 printStackTrace (Main.cpp:64)
-[1] 0x7ff716653d62 verboseTerminateHandler (Main.cpp:162)
-[2] 0x7ff7179bfd57 terminate
-[3] 0x7ff7179aef66 __scrt_unhandled_exception_filter
+[ 0] 0x00007ff716653901 printStackTrace (crash_handlers.h:142)
+[ 1] 0x00007ff716653d62 verboseTerminateHandler (crash_handlers.h:245)
+[ 2] 0x00007ff7179bfd57 terminate
+[ 3] 0x00007ff7179aef66 __scrt_unhandled_exception_filter
 ...
-========== END STACK TRACE ==========
+========== END STACK TRACE (12 frames) ==========
+
+--- Loaded Modules (45 total, showing first 10) ---
+  rippled.exe                    @ 0x7ff716650000 (45678 KB)
+  ntdll.dll                      @ 0x7fff12340000 (1234 KB)
+  ...
+
+################################################################################
+###                         END CRASH REPORT                                 ###
+################################################################################
 ```
 
 ### JSON format (for machine parsing)
@@ -235,8 +288,18 @@ Run the demo to see Rich-style logging in action:
 
 ```batch
 cd examples
+
+REM Basic build
 cl /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib shell32.lib
-test_crash.exe 6
+
+REM Or with git info captured at build time
+for /f "tokens=*" %%i in ('..\scripts\get_git_info.bat') do set GIT_FLAGS=%%i
+cl %GIT_FLAGS% /EHsc /Zi /utf-8 test_crash.cpp /link dbghelp.lib shell32.lib
+
+REM Run demo
+test_crash.exe 6    REM Rich-style logging demo
+test_crash.exe 7    REM Show build & system info only
+test_crash.exe 1    REM Trigger bad_alloc crash with full report
 ```
 
 **Note:** Use Windows Terminal or a terminal with VT/ANSI support for full color output.
@@ -278,10 +341,15 @@ test_crash.exe 6
 ```
 rippled-windows-debug/
 ├── src/
+│   ├── build_info.h        # Build & system info capture
 │   ├── crash_handlers.h    # Verbose crash diagnostics
 │   ├── debug_log.h         # Rich-style debug logging
 │   ├── minidump.h          # Minidump generation
 │   └── rippled_debug.h     # Single-include header
+├── cmake/
+│   └── GitInfo.cmake       # CMake helper for git info
+├── scripts/
+│   └── get_git_info.bat    # Batch script for git info
 ├── patches/
 │   └── rippled_main.patch  # Patch for Main.cpp
 ├── examples/

@@ -27,6 +27,7 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
+#include <intrin.h>
 #include <csignal>
 #include <iostream>
 #include <exception>
@@ -37,6 +38,9 @@
 
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "psapi.lib")
+
+// Include build info for version strings (if available)
+#include "build_info.h"
 
 namespace rippled_debug {
 
@@ -315,6 +319,35 @@ inline void printExceptionDiagnostics(const char* exceptionType) {
 }
 
 /**
+ * Print build and system information for crash report.
+ */
+inline void printCrashBuildInfo() {
+    std::cerr << "\n--- Build & System Info ---\n";
+
+    // Toolkit version
+    std::cerr << "Toolkit:          rippled-windows-debug v" << RIPPLED_DEBUG_VERSION_STRING << "\n";
+    std::cerr << "Git:              " << GIT_BRANCH << " @ " << GIT_COMMIT_HASH;
+    if (GIT_DIRTY) std::cerr << " (dirty)";
+    std::cerr << "\n";
+    std::cerr << "Built:            " << BUILD_DATE << " " << BUILD_TIME << "\n";
+    std::cerr << "Compiler:         " << COMPILER_NAME << " " << COMPILER_VERSION_STRING << "\n";
+    std::cerr << "Architecture:     " << BUILD_ARCH << " " << getProcessBitness() << "\n";
+
+    // Windows version
+    std::cerr << "Windows:          " << getWindowsVersion() << "\n";
+    std::cerr << "Edition:          " << getWindowsBuildDetails() << "\n";
+
+    // CPU
+    std::cerr << "CPU:              " << getCpuInfo() << "\n";
+
+    // Computer
+    std::cerr << "Computer:         " << getComputerName() << "\n";
+    std::cerr << "User:             " << getUserName();
+    if (isRunningAsAdmin()) std::cerr << " (Administrator)";
+    std::cerr << "\n";
+}
+
+/**
  * Custom terminate handler that prints exception details before crashing.
  */
 inline void verboseTerminateHandler()
@@ -326,6 +359,9 @@ inline void verboseTerminateHandler()
     std::cerr << "################################################################################\n";
     std::cerr << "\n";
     std::cerr << "Timestamp: " << getCrashTimestamp() << "\n";
+
+    // Print build info right after timestamp
+    printCrashBuildInfo();
 
     const char* exceptionType = "unknown";
 
@@ -393,6 +429,10 @@ inline void signalHandler(int signal)
     std::cerr << "################################################################################\n";
     std::cerr << "\n";
     std::cerr << "Timestamp: " << getCrashTimestamp() << "\n";
+
+    // Print build info right after timestamp
+    printCrashBuildInfo();
+
     std::cerr << "\n--- Signal Details ---\n";
 
     switch(signal)
