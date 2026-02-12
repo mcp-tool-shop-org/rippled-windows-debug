@@ -1,0 +1,29 @@
+--- a/src/xrpld/app/main/Main.cpp
++++ b/src/xrpld/app/main/Main.cpp
+@@ -32,6 +32,13 @@
+ #if BOOST_OS_WINDOWS
+ #include <sys/timeb.h>
+ #include <sys/types.h>
++
++// Optional: rippled-windows-debug toolkit for verbose crash diagnostics
++// See: https://github.com/mcp-tool-shop-org/rippled-windows-debug
++#ifdef RIPPLED_WINDOWS_DEBUG
++#include "rippled_debug.h"
++#endif
++
+ #endif
+
+ // Do we know the platform we're compiling on? If you're adding new platforms
+@@ -783,6 +790,12 @@ main(int argc, char** argv)
+ int
+ main(int argc, char** argv)
+ {
++#if BOOST_OS_WINDOWS && defined(RIPPLED_WINDOWS_DEBUG)
++    // Install verbose crash handlers for Windows debugging
++    // This provides better diagnostics than STATUS_STACK_BUFFER_OVERRUN
++    RIPPLED_DEBUG_INIT();
++#endif
++
+ #if BOOST_OS_WINDOWS
+     {
+         // Work around for https://svn.boost.org/trac/boost/ticket/10657

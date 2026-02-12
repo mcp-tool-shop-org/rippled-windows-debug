@@ -1,0 +1,194 @@
+# rippled-windows-debug
+
+**Windows debugging toolkit for rippled (XRPL validator node)**
+
+This toolkit provides verbose crash diagnostics for rippled on Windows, making it easier to identify and debug issues that are difficult to diagnose on the platform.
+
+## The Problem
+
+Windows crashes often show misleading error codes:
+- `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` - Often not actually stack corruption
+- `abort() has been called` - Hides the real exception
+- No stack traces in release builds
+
+**Example**: A `std::bad_alloc` (memory allocation failure) can appear as `STATUS_STACK_BUFFER_OVERRUN` because:
+1. Exception not caught → `std::terminate()` called
+2. `terminate()` calls `abort()`
+3. MSVC's `/GS` security checks interpret this as buffer overrun
+
+## What This Toolkit Provides
+
+### 1. Verbose Crash Handlers (`crash_handlers.h`)
+
+Single-header crash diagnostics that capture:
+- Actual exception type and message
+- Full stack trace with symbol resolution
+- Signal information (SIGABRT, SIGSEGV, etc.)
+
+### 2. Debug Logging Macros (`debug_log.h`)
+
+Structured logging for tracking execution flow:
+- Section entry/exit markers
+- Variable state dumps
+- Timing information
+
+### 3. Minidump Generation (`minidump.h`)
+
+Automatic crash dump capture:
+- Full memory dumps for debugging
+- Configurable dump location
+- Automatic cleanup of old dumps
+
+## Quick Start
+
+### Option 1: Patch rippled (Recommended for debugging)
+
+Apply the patch to `src/xrpld/app/main/Main.cpp`:
+
+```cpp
+// Add at top of file (after existing includes)
+#if BOOST_OS_WINDOWS
+#include "crash_handlers.h"
+#endif
+
+// Add at start of main()
+#if BOOST_OS_WINDOWS
+    installVerboseCrashHandlers();
+#endif
+```
+
+### Option 2: Standalone test wrapper
+
+```cpp
+#include "crash_handlers.h"
+
+int main() {
+    installVerboseCrashHandlers();
+
+    // Your test code here
+    // Any crash will now show full diagnostics
+}
+```
+
+## Example Output
+
+When a crash occurs, you'll see:
+
+```
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!! VERBOSE CRASH HANDLER - terminate() called
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Exception type: class std::bad_alloc
+Exception message: bad allocation
+
+========== STACK TRACE ==========
+[0] 0x7ff7166539e1 printStackTrace (Main.cpp:64)
+[1] 0x7ff716653d62 verboseTerminateHandler (Main.cpp:162)
+[2] 0x7ff7179bfd57 terminate
+[3] 0x7ff7179aef66 __scrt_unhandled_exception_filter
+...
+========== END STACK TRACE ==========
+```
+
+## Building rippled with Debug Toolkit
+
+### Prerequisites
+
+- Visual Studio 2022 Build Tools (or full VS2022)
+- Conan 2.x
+- CMake 3.25+
+- Ninja
+
+### Build Steps
+
+```batch
+REM Set up VS2022 environment
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+
+REM Install dependencies
+conan install . --output-folder=build --build=missing
+
+REM Configure with debug info in release
+cmake -G Ninja -B build ^
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+    -DCMAKE_TOOLCHAIN_FILE=build/generators/conan_toolchain.cmake ^
+    -Dxrpld=ON
+
+REM Build
+cmake --build build
+```
+
+### Generating PDB files for Release builds
+
+For symbol resolution in release builds, add to CMakeLists.txt:
+
+```cmake
+if(MSVC)
+    # Generate PDB for release builds
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
+endif()
+```
+
+## Common Windows Issues
+
+### 1. `std::bad_alloc` appearing as `STATUS_STACK_BUFFER_OVERRUN`
+
+**Cause**: Unhandled exception → terminate → abort → /GS check
+
+**Solution**: Use this toolkit to see the real exception
+
+### 2. Missing symbols in stack traces
+
+**Cause**: No PDB files for release builds
+
+**Solution**: Build with `/Zi` and `/DEBUG` linker flag
+
+### 3. Crash during RPC handler construction
+
+**Cause**: Memory allocation failure in JsonContext
+
+**Solution**: Check system memory, investigate allocator behavior
+
+## Integration with CI/CD
+
+```yaml
+# GitHub Actions example
+- name: Build with debug toolkit
+  run: |
+    # Apply crash handler patch
+    # Build with RelWithDebInfo
+    # Run tests
+    # Upload crash dumps as artifacts if any
+```
+
+## Files
+
+```
+rippled-windows-debug/
+├── src/
+│   ├── crash_handlers.h    # Verbose crash diagnostics
+│   ├── debug_log.h         # Debug logging macros
+│   └── minidump.h          # Minidump generation
+├── patches/
+│   └── main_cpp.patch      # Patch for Main.cpp
+├── examples/
+│   └── test_crash.cpp      # Example usage
+├── docs/
+│   └── WINDOWS_DEBUGGING.md
+└── README.md
+```
+
+## Related Tools
+
+- **[build-governor](https://github.com/mcp-tool-shop-org/build-governor)** - Memory-aware build orchestrator for parallel compilation (prevents OOM during rippled builds)
+
+## Contributing
+
+This toolkit was developed while debugging issue [XRPLF/rippled#6293](https://github.com/XRPLF/rippled/issues/6293).
+
+Contributions welcome!
+
+## License
+
+MIT License - Same as rippled
