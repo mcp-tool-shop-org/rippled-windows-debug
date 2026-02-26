@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.md">English</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center">
@@ -11,9 +11,9 @@
   <a href="https://mcp-tool-shop-org.github.io/rippled-windows-debug/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-Windows debugging toolkit for rippled (XRPL validator node). Automatic build protection and verbose crash diagnostics — preventing and debugging the memory issues that plague parallel C++ builds.
+Kit di debug per Windows per rippled (nodo di convalida XRPL). Protezione automatica della compilazione e diagnostica dettagliata degli arresti anomali, per prevenire e risolvere i problemi di memoria che affliggono le compilazioni parallele in C++.
 
-## Quick Start
+## Guida Rapida
 
 ```powershell
 # Clone the toolkit
@@ -27,30 +27,30 @@ cd rippled-windows-debug
 cmake --build build --parallel 16  # Governor prevents OOM automatically
 ```
 
-## The Problem
+## Il Problema
 
-Parallel C++ builds on Windows frequently fail due to memory exhaustion:
+Le compilazioni parallele in C++ su Windows spesso falliscono a causa dell'esaurimento della memoria:
 
-1. **Build failures**: Each `cl.exe` can use 1-4 GB RAM. High `-j` values exhaust memory.
-2. **Misleading errors**: `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` is often actually `std::bad_alloc`
-3. **No diagnostics**: Silent `cl.exe` exits with code 1, no explanation
-4. **System freezes**: When commit charge hits 100%, Windows becomes unresponsive
+1. **Errori di compilazione**: Ogni istanza di `cl.exe` può utilizzare da 1 a 4 GB di RAM. Valori elevati di `-j` esauriscono la memoria.
+2. **Errori fuorvianti**: `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` è spesso in realtà `std::bad_alloc`.
+3. **Nessuna diagnostica**: `cl.exe` si interrompe silenziosamente con codice 1, senza alcuna spiegazione.
+4. **Blocchi del sistema**: Quando la "commit charge" raggiunge il 100%, Windows diventa non reattivo.
 
-**Root cause**: A `std::bad_alloc` appears as `STATUS_STACK_BUFFER_OVERRUN` because:
-1. Exception not caught → `std::terminate()` called
-2. `terminate()` calls `abort()`
-3. MSVC's `/GS` security checks interpret this as buffer overrun
+**Causa principale**: Un errore `std::bad_alloc` viene visualizzato come `STATUS_STACK_BUFFER_OVERRUN` perché:
+1. L'eccezione non viene catturata → viene chiamata `std::terminate()`.
+2. `terminate()` chiama `abort()`.
+3. I controlli di sicurezza `/GS` di MSVC interpretano questo come un overflow del buffer.
 
-## What This Toolkit Provides
+## Cosa Fornisce Questo Kit
 
-### 1. Build Governor (Automatic OOM Protection)
+### 1. Build Governor (Protezione Automatica da Esaurimento Memoria)
 
-**Prevents crashes before they happen.** Located in `tools/build-governor/`:
+**Previene gli arresti anomali prima che si verifichino.** Si trova in `tools/build-governor/`:
 
-- **Zero-config protection**: Wrappers auto-start governor on first build
-- **Adaptive throttling**: Monitors commit charge, slows builds when memory pressure rises
-- **Actionable diagnostics**: "Memory pressure detected, recommend -j4"
-- **Auto-shutdown**: Governor exits after 30 min idle
+- **Protezione senza configurazione**: I wrapper avviano automaticamente il governor alla prima compilazione.
+- **Regolazione adattiva**: Monitora la "commit charge" e rallenta le compilazioni quando la pressione sulla memoria aumenta.
+- **Diagnostica utile**: "Pressione sulla memoria rilevata, si consiglia -j4".
+- **Arresto automatico**: Il governor si interrompe dopo 30 minuti di inattività.
 
 ```powershell
 # One-time setup
@@ -62,43 +62,43 @@ msbuild /m:16
 ninja -j 8
 ```
 
-### 2. Verbose Crash Handlers (`crash_handlers.h`)
+### 2. Gestori di Arresti Anomali Dettagliati (`crash_handlers.h`)
 
-**Diagnoses crashes that do happen.** Single-header crash diagnostics that capture:
-- Actual exception type and message (reveals `std::bad_alloc` hidden as `STATUS_STACK_BUFFER_OVERRUN`)
-- Full stack trace with symbol resolution
-- Signal information (SIGABRT, SIGSEGV, etc.)
-- **Complete build info** (toolkit version, git commit, compiler)
-- **System info** (Windows version, CPU, memory, computer name)
+**Diagnostica gli arresti anomali che si verificano.** Diagnostica degli arresti anomali in un unico file di intestazione che cattura:
+- Il tipo e il messaggio effettivo dell'eccezione (rivela `std::bad_alloc` nascosto come `STATUS_STACK_BUFFER_OVERRUN`).
+- La traccia dello stack completa con la risoluzione dei simboli.
+- Informazioni sui segnali (SIGABRT, SIGSEGV, ecc.).
+- **Informazioni complete sulla compilazione** (versione del kit, commit di Git, compilatore).
+- **Informazioni sul sistema** (versione di Windows, CPU, memoria, nome del computer).
 
-### 3. Rich-style Debug Logging (`debug_log.h`)
+### 3. Logging Dettagliato in Stile "Rich" (`debug_log.h`)
 
-Beautiful terminal logging inspired by Python's [Rich](https://github.com/Textualize/rich) library:
-- **Colored log levels** - INFO (cyan), WARN (yellow), ERROR (red)
-- **Box-drawing characters** - Visual section boundaries with Unicode
-- **Automatic timing** - Sections show elapsed time on completion
-- **Correlation IDs** - Track related log entries across threads
-- **Multiple formats** - Rich (colored), Text (plain), JSON (machine-parseable)
+Logging dettagliato ispirato alla libreria [Rich](https://github.com/Textualize/rich) di Python:
+- **Livelli di log colorati** - INFO (ciano), AVVISO (giallo), ERRORE (rosso).
+- **Caratteri di disegno di riquadri** - Confini visivi delle sezioni con caratteri Unicode.
+- **Temporizzazione automatica** - Le sezioni mostrano il tempo trascorso al termine.
+- **ID di correlazione** - Traccia le voci di log correlate tra i thread.
+- **Formati multipli** - Rich (colorato), Testo (semplice), JSON (analizzabile dalle macchine).
 
-### 4. Minidump Generation (`minidump.h`)
+### 4. Generazione di Minidump (`minidump.h`)
 
-Automatic crash dump capture:
-- Full memory dumps for debugging
-- Configurable dump location
-- Automatic cleanup of old dumps
+Cattura automatica degli arresti anomali:
+- Dump completi della memoria per il debug.
+- Posizione del dump configurabile.
+- Pulizia automatica dei dump obsoleti.
 
-### 5. Build Information (`build_info.h`)
+### 5. Informazioni sulla Compilazione (`build_info.h`)
 
-Comprehensive build and system info:
-- Toolkit version
-- Git commit hash, branch, dirty status
-- Compiler name and version
-- Build date/time and architecture
-- Windows version and build number
-- CPU model and core count
-- System memory
+Informazioni complete sulla compilazione e sul sistema:
+- Versione del kit.
+- Hash del commit di Git, ramo, stato "dirty".
+- Nome e versione del compilatore.
+- Data/ora di compilazione e architettura.
+- Versione e numero di build di Windows.
+- Modello e numero di core della CPU.
+- Memoria del sistema.
 
-## How the Governor Works
+## Come Funziona il Governor
 
 ```
   cmake --build . --parallel 16
@@ -131,14 +131,14 @@ Comprehensive build and system info:
     Release tokens
 ```
 
-The governor monitors **commit charge** (not free RAM) because:
-- Commit charge = promised memory (even if not yet paged in)
-- When commit limit is reached, allocations fail immediately
-- Free RAM can be misleading (file cache, standby pages)
+Il governor monitora la **"commit charge"** (non la RAM libera) perché:
+- La "commit charge" rappresenta la memoria promessa (anche se non ancora caricata).
+- Quando si raggiunge il limite di "commit", le allocazioni falliscono immediatamente.
+- La RAM libera può essere fuorviante (cache dei file, pagine di standby).
 
-## Patching rippled for Crash Diagnostics
+## Applicazione della Patch a rippled per la Diagnostica degli Arresti Anomali
 
-Apply the patch to `src/xrpld/app/main/Main.cpp`:
+Applica la patch a `src/xrpld/app/main/Main.cpp`:
 
 ```cpp
 // Add at top of file (after existing includes)
@@ -152,9 +152,9 @@ Apply the patch to `src/xrpld/app/main/Main.cpp`:
 #endif
 ```
 
-## Example Crash Output
+## Esempio di Output in Caso di Arresto Anomalo
 
-When a crash occurs, you'll see a comprehensive report instead of cryptic error codes:
+Quando si verifica un arresto anomalo, vedrai un rapporto completo invece di codici di errore criptici:
 
 ```
 ################################################################################
@@ -203,7 +203,7 @@ Memory Load:        75%
 ################################################################################
 ```
 
-## Rich-style Logging Example
+## Esempio di Logging in Stile "Rich"
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -222,19 +222,19 @@ Memory Load:        75%
 └── ✔ database_init (156.2ms) ────────────────────────────────────────┘
 ```
 
-## Building rippled with Debug Toolkit
+## Compilazione di rippled con il Kit di Debug
 
-### Prerequisites
+### Prerequisiti
 
-- Visual Studio 2022 Build Tools (or full VS2022)
-- .NET 9.0 SDK (for Build Governor)
-- Python 3.x with Conan 2.x (`pip install conan`)
-- CMake 3.25+ (comes with Conan or install separately)
-- Ninja (comes with Conan or install separately)
+- Visual Studio 2022 Build Tools (o la versione completa di VS2022)
+- .NET 9.0 SDK (per Build Governor)
+- Python 3.x con Conan 2.x (`pip install conan`)
+- CMake 3.25+ (incluso in Conan o installabile separatamente)
+- Ninja (incluso in Conan o installabile separatamente)
 
-### Option 1: One-Command Build (Recommended)
+### Opzione 1: Build con un solo comando (consigliata)
 
-The toolkit includes a PowerShell script that handles everything:
+Il toolkit include uno script PowerShell che gestisce tutto:
 
 ```powershell
 # In your rippled directory
@@ -247,15 +247,15 @@ copy F:\AI\rippled-windows-debug\scripts\build-rippled.ps1 .
 powershell -ExecutionPolicy Bypass -File build-rippled.ps1 -Parallel 8
 ```
 
-This script automatically:
-- Sets up VS2022 environment
-- Adds Python Scripts to PATH (for Conan)
-- Configures Build Governor wrappers
-- Runs Conan install
-- Configures CMake with Ninja
-- Builds with governor protection
+Questo script esegue automaticamente le seguenti operazioni:
+- Configura l'ambiente VS2022
+- Aggiunge gli script Python a PATH (per Conan)
+- Configura i wrapper di Build Governor
+- Esegue l'installazione di Conan
+- Configura CMake con Ninja
+- Esegue la compilazione con protezione tramite governor
 
-### Option 2: Manual Build Steps
+### Opzione 2: Passaggi di compilazione manuali
 
 ```batch
 REM 1. Set up automatic build protection first!
@@ -277,9 +277,9 @@ REM 5. Build (governor automatically protects this!)
 cmake --build build --parallel 16
 ```
 
-### Generating PDB files for Release builds
+### Generazione dei file PDB per le build di rilascio
 
-For symbol resolution in release builds, add to CMakeLists.txt:
+Per la risoluzione dei simboli nelle build di rilascio, aggiungere quanto segue a CMakeLists.txt:
 
 ```cmake
 if(MSVC)
@@ -291,7 +291,7 @@ endif()
 
 ## Demo
 
-Run the demo to see Rich-style logging in action:
+Eseguire la demo per vedere il logging in stile Rich in azione:
 
 ```batch
 cd examples
@@ -305,9 +305,9 @@ test_crash.exe 7    REM Show build & system info only
 test_crash.exe 1    REM Trigger bad_alloc crash with full report
 ```
 
-**Note:** Use Windows Terminal or a terminal with VT/ANSI support for full color output.
+**Nota:** Utilizzare Windows Terminal o un terminale con supporto VT/ANSI per ottenere l'output a colori.
 
-## Files
+## File
 
 ```
 rippled-windows-debug/
@@ -336,42 +336,42 @@ rippled-windows-debug/
 └── README.md
 ```
 
-## Common Windows Issues
+## Problemi comuni su Windows
 
-### 1. `std::bad_alloc` appearing as `STATUS_STACK_BUFFER_OVERRUN`
+### 1. `std::bad_alloc` che appare come `STATUS_STACK_BUFFER_OVERRUN`
 
-**Cause**: Unhandled exception → terminate → abort → /GS check
+**Causa**: Eccezione non gestita → terminate → abort → controllo /GS
 
-**Solution**:
-1. **Prevent it**: Use Build Governor (`.\scripts\setup-governor.ps1`)
-2. **Diagnose it**: Use crash handlers to see the real exception
+**Soluzione**:
+1. **Prevenire il problema**: Utilizzare Build Governor (`.\scripts\setup-governor.ps1`)
+2. **Diagnosticare il problema**: Utilizzare i gestori di crash per visualizzare l'eccezione reale
 
-### 2. Missing symbols in stack traces
+### 2. Simboli mancanti nelle tracce dello stack
 
-**Cause**: No PDB files for release builds
+**Causa**: Assenza di file PDB per le build di rilascio
 
-**Solution**: Build with `/Zi` and `/DEBUG` linker flag
+**Soluzione**: Compilare con i flag del linker `/Zi` e `/DEBUG`
 
-### 3. Build hangs or system freezes
+### 3. La compilazione si blocca o il sistema si blocca
 
-**Cause**: Too many parallel compilations exhausting commit charge
+**Causa**: Troppe compilazioni parallele che esauriscono la memoria disponibile
 
-**Solution**: Use Build Governor - it automatically throttles based on memory pressure
+**Soluzione**: Utilizzare Build Governor, che regola automaticamente la velocità in base alla pressione sulla memoria
 
-## Related Tools
+## Strumenti correlati
 
-- **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Python async engine with structured logging (inspired debug_log.h patterns)
+- **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Motore asincrono Python con logging strutturato (ispirato ai pattern di debug_log.h)
 
-## Contributing
+## Contributi
 
-This toolkit was developed while debugging issue [XRPLF/rippled#6293](https://github.com/XRPLF/rippled/issues/6293).
+Questo toolkit è stato sviluppato durante il debug del problema [XRPLF/rippled#6293](https://github.com/XRPLF/rippled/issues/6293).
 
-Contributions welcome!
+Sono benvenuti i contributi!
 
-## License
+## Licenza
 
-MIT License — same as rippled.
+Licenza MIT — la stessa di rippled.
 
 ---
 
-Built by <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
+Creato da <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a

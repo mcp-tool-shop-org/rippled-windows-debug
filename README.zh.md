@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.md">English</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
 </p>
 
 <p align="center">
@@ -11,9 +11,9 @@
   <a href="https://mcp-tool-shop-org.github.io/rippled-windows-debug/"><img src="https://img.shields.io/badge/Landing_Page-live-blue" alt="Landing Page"></a>
 </p>
 
-Windows debugging toolkit for rippled (XRPL validator node). Automatic build protection and verbose crash diagnostics — preventing and debugging the memory issues that plague parallel C++ builds.
+Windows 调试工具包，用于 rippled (XRPL 验证节点)。自动构建保护和详细的崩溃诊断，可防止和调试并行 C++ 构建中常见的内存问题。
 
-## Quick Start
+## 快速开始
 
 ```powershell
 # Clone the toolkit
@@ -27,30 +27,30 @@ cd rippled-windows-debug
 cmake --build build --parallel 16  # Governor prevents OOM automatically
 ```
 
-## The Problem
+## 问题
 
-Parallel C++ builds on Windows frequently fail due to memory exhaustion:
+Windows 上的并行 C++ 构建经常因内存耗尽而失败：
 
-1. **Build failures**: Each `cl.exe` can use 1-4 GB RAM. High `-j` values exhaust memory.
-2. **Misleading errors**: `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` is often actually `std::bad_alloc`
-3. **No diagnostics**: Silent `cl.exe` exits with code 1, no explanation
-4. **System freezes**: When commit charge hits 100%, Windows becomes unresponsive
+1. **构建失败**: 每个 `cl.exe` 可能使用 1-4 GB 的 RAM。过高的 `-j` 值会导致内存耗尽。
+2. **误导性错误**: `STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` 实际上通常是 `std::bad_alloc`。
+3. **无诊断信息**: `cl.exe` 静默退出，返回代码 1，没有解释。
+4. **系统冻结**: 当提交费用达到 100% 时，Windows 变得无响应。
 
-**Root cause**: A `std::bad_alloc` appears as `STATUS_STACK_BUFFER_OVERRUN` because:
-1. Exception not caught → `std::terminate()` called
-2. `terminate()` calls `abort()`
-3. MSVC's `/GS` security checks interpret this as buffer overrun
+**根本原因**: `std::bad_alloc` 会显示为 `STATUS_STACK_BUFFER_OVERRUN`，因为：
+1. 异常未捕获 → 调用 `std::terminate()`
+2. `terminate()` 调用 `abort()`
+3. MSVC 的 `/GS` 安全检查将其解释为缓冲区溢出。
 
-## What This Toolkit Provides
+## 此工具包提供的功能
 
-### 1. Build Governor (Automatic OOM Protection)
+### 1. 构建管理器（自动 OOM 保护）
 
-**Prevents crashes before they happen.** Located in `tools/build-governor/`:
+**在崩溃发生之前进行预防。** 位于 `tools/build-governor/` 目录中：
 
-- **Zero-config protection**: Wrappers auto-start governor on first build
-- **Adaptive throttling**: Monitors commit charge, slows builds when memory pressure rises
-- **Actionable diagnostics**: "Memory pressure detected, recommend -j4"
-- **Auto-shutdown**: Governor exits after 30 min idle
+- **零配置保护**: 包装器会在首次构建时自动启动管理器。
+- **自适应节流**: 监控提交费用，并在内存压力增加时减慢构建速度。
+- **可操作的诊断信息**: "检测到内存压力，建议使用 -j4"。
+- **自动关闭**: 30 分钟无操作后，管理器自动退出。
 
 ```powershell
 # One-time setup
@@ -62,43 +62,43 @@ msbuild /m:16
 ninja -j 8
 ```
 
-### 2. Verbose Crash Handlers (`crash_handlers.h`)
+### 2. 详细的崩溃处理程序 (`crash_handlers.h`)
 
-**Diagnoses crashes that do happen.** Single-header crash diagnostics that capture:
-- Actual exception type and message (reveals `std::bad_alloc` hidden as `STATUS_STACK_BUFFER_OVERRUN`)
-- Full stack trace with symbol resolution
-- Signal information (SIGABRT, SIGSEGV, etc.)
-- **Complete build info** (toolkit version, git commit, compiler)
-- **System info** (Windows version, CPU, memory, computer name)
+**诊断已发生的崩溃。** 单个头文件，提供崩溃诊断信息，可以捕获：
+- 实际的异常类型和消息（揭示隐藏在 `STATUS_STACK_BUFFER_OVERRUN` 中的 `std::bad_alloc`）。
+- 完整的堆栈跟踪，包含符号解析。
+- 信号信息（SIGABRT, SIGSEGV 等）。
+- **完整的构建信息**（工具包版本、git 提交、编译器）。
+- **系统信息**（Windows 版本、CPU、内存、计算机名称）。
 
-### 3. Rich-style Debug Logging (`debug_log.h`)
+### 3. 丰富的日志记录 (`debug_log.h`)
 
-Beautiful terminal logging inspired by Python's [Rich](https://github.com/Textualize/rich) library:
-- **Colored log levels** - INFO (cyan), WARN (yellow), ERROR (red)
-- **Box-drawing characters** - Visual section boundaries with Unicode
-- **Automatic timing** - Sections show elapsed time on completion
-- **Correlation IDs** - Track related log entries across threads
-- **Multiple formats** - Rich (colored), Text (plain), JSON (machine-parseable)
+灵感来自 Python 的 [Rich](https://github.com/Textualize/rich) 库的精美终端日志：
+- **彩色日志级别** - 信息 (INFO，青色)、警告 (WARN，黄色)、错误 (ERROR，红色)。
+- **边框字符** - 使用 Unicode 字符，在日志中创建视觉区域分隔。
+- **自动计时** - 每个区域显示完成后的耗时。
+- **关联 ID** - 跟踪跨线程的关联日志条目。
+- **多种格式** - Rich (彩色)、Text (纯文本)、JSON (可供机器解析)。
 
-### 4. Minidump Generation (`minidump.h`)
+### 4. 崩溃转储生成 (`minidump.h`)
 
-Automatic crash dump capture:
-- Full memory dumps for debugging
-- Configurable dump location
-- Automatic cleanup of old dumps
+自动崩溃转储捕获：
+- 用于调试的完整内存转储。
+- 可配置的转储位置。
+- 自动清理旧的转储文件。
 
-### 5. Build Information (`build_info.h`)
+### 5. 构建信息 (`build_info.h`)
 
-Comprehensive build and system info:
-- Toolkit version
-- Git commit hash, branch, dirty status
-- Compiler name and version
-- Build date/time and architecture
-- Windows version and build number
-- CPU model and core count
-- System memory
+全面的构建和系统信息：
+- 工具包版本。
+- Git 提交哈希、分支、脏状态。
+- 编译器名称和版本。
+- 构建日期/时间以及架构。
+- Windows 版本和构建号。
+- CPU 型号和核心数。
+- 系统内存。
 
-## How the Governor Works
+## 构建管理器的工作原理
 
 ```
   cmake --build . --parallel 16
@@ -131,14 +131,14 @@ Comprehensive build and system info:
     Release tokens
 ```
 
-The governor monitors **commit charge** (not free RAM) because:
-- Commit charge = promised memory (even if not yet paged in)
-- When commit limit is reached, allocations fail immediately
-- Free RAM can be misleading (file cache, standby pages)
+构建管理器监控 **提交费用**（而不是空闲 RAM），因为：
+- 提交费用 = 承诺的内存（即使尚未分页到内存中）。
+- 当达到提交限制时，分配会立即失败。
+- 空闲 RAM 可能具有误导性（文件缓存、预留页面）。
 
-## Patching rippled for Crash Diagnostics
+## 打补丁 rippled 以进行崩溃诊断
 
-Apply the patch to `src/xrpld/app/main/Main.cpp`:
+将补丁应用到 `src/xrpld/app/main/Main.cpp`：
 
 ```cpp
 // Add at top of file (after existing includes)
@@ -152,9 +152,9 @@ Apply the patch to `src/xrpld/app/main/Main.cpp`:
 #endif
 ```
 
-## Example Crash Output
+## 崩溃输出示例
 
-When a crash occurs, you'll see a comprehensive report instead of cryptic error codes:
+当发生崩溃时，您将看到一份全面的报告，而不是神秘的错误代码：
 
 ```
 ################################################################################
@@ -203,7 +203,7 @@ Memory Load:        75%
 ################################################################################
 ```
 
-## Rich-style Logging Example
+## 丰富的日志记录示例
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -222,19 +222,19 @@ Memory Load:        75%
 └── ✔ database_init (156.2ms) ────────────────────────────────────────┘
 ```
 
-## Building rippled with Debug Toolkit
+## 使用调试工具包构建 rippled
 
-### Prerequisites
+### 先决条件
 
-- Visual Studio 2022 Build Tools (or full VS2022)
-- .NET 9.0 SDK (for Build Governor)
-- Python 3.x with Conan 2.x (`pip install conan`)
-- CMake 3.25+ (comes with Conan or install separately)
-- Ninja (comes with Conan or install separately)
+- Visual Studio 2022 构建工具（或完整版 VS2022）
+- .NET 9.0 SDK（用于构建管理器）
+- Python 3.x，以及 Conan 2.x (`pip install conan`)
+- CMake 3.25+（包含在 Conan 中，或单独安装）
+- Ninja（包含在 Conan 中，或单独安装）
 
-### Option 1: One-Command Build (Recommended)
+### 选项 1：一键构建（推荐）
 
-The toolkit includes a PowerShell script that handles everything:
+该工具包包含一个 PowerShell 脚本，可以处理所有操作：
 
 ```powershell
 # In your rippled directory
@@ -247,15 +247,15 @@ copy F:\AI\rippled-windows-debug\scripts\build-rippled.ps1 .
 powershell -ExecutionPolicy Bypass -File build-rippled.ps1 -Parallel 8
 ```
 
-This script automatically:
-- Sets up VS2022 environment
-- Adds Python Scripts to PATH (for Conan)
-- Configures Build Governor wrappers
-- Runs Conan install
-- Configures CMake with Ninja
-- Builds with governor protection
+该脚本会自动执行以下操作：
+- 设置 VS2022 环境
+- 将 Python 脚本添加到 PATH 环境变量（用于 Conan）
+- 配置构建管理器包装器
+- 运行 Conan 安装
+- 使用 Ninja 配置 CMake
+- 使用构建管理器进行构建
 
-### Option 2: Manual Build Steps
+### 选项 2：手动构建步骤
 
 ```batch
 REM 1. Set up automatic build protection first!
@@ -277,9 +277,9 @@ REM 5. Build (governor automatically protects this!)
 cmake --build build --parallel 16
 ```
 
-### Generating PDB files for Release builds
+### 为发布版本生成 PDB 文件
 
-For symbol resolution in release builds, add to CMakeLists.txt:
+为了在发布版本的符号解析中，请在 CMakeLists.txt 文件中添加以下内容：
 
 ```cmake
 if(MSVC)
@@ -289,9 +289,9 @@ if(MSVC)
 endif()
 ```
 
-## Demo
+## 演示
 
-Run the demo to see Rich-style logging in action:
+运行演示以查看 Rich 风格的日志记录：
 
 ```batch
 cd examples
@@ -305,9 +305,9 @@ test_crash.exe 7    REM Show build & system info only
 test_crash.exe 1    REM Trigger bad_alloc crash with full report
 ```
 
-**Note:** Use Windows Terminal or a terminal with VT/ANSI support for full color output.
+**注意：** 为了获得完整的彩色输出，请使用 Windows Terminal 或支持 VT/ANSI 的终端。
 
-## Files
+## 文件
 
 ```
 rippled-windows-debug/
@@ -336,42 +336,42 @@ rippled-windows-debug/
 └── README.md
 ```
 
-## Common Windows Issues
+## Windows 常见问题
 
-### 1. `std::bad_alloc` appearing as `STATUS_STACK_BUFFER_OVERRUN`
+### 1. `std::bad_alloc` 错误显示为 `STATUS_STACK_BUFFER_OVERRUN`
 
-**Cause**: Unhandled exception → terminate → abort → /GS check
+**原因：** 未处理的异常 → terminate → abort → /GS 检查
 
-**Solution**:
-1. **Prevent it**: Use Build Governor (`.\scripts\setup-governor.ps1`)
-2. **Diagnose it**: Use crash handlers to see the real exception
+**解决方案：**
+1. **预防：** 使用构建管理器 (`.\scripts\setup-governor.ps1`)
+2. **诊断：** 使用崩溃处理程序以查看实际的异常
 
-### 2. Missing symbols in stack traces
+### 2. 堆栈跟踪中缺少符号
 
-**Cause**: No PDB files for release builds
+**原因：** 发布版本缺少 PDB 文件
 
-**Solution**: Build with `/Zi` and `/DEBUG` linker flag
+**解决方案：** 使用 `/Zi` 和 `/DEBUG` 链接器标志进行构建
 
-### 3. Build hangs or system freezes
+### 3. 构建卡住或系统冻结
 
-**Cause**: Too many parallel compilations exhausting commit charge
+**原因：** 过多的并行编译导致资源耗尽
 
-**Solution**: Use Build Governor - it automatically throttles based on memory pressure
+**解决方案：** 使用构建管理器 - 它会自动根据内存压力进行限制
 
-## Related Tools
+## 相关工具
 
-- **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Python async engine with structured logging (inspired debug_log.h patterns)
+- **[FlexiFlow](https://github.com/mcp-tool-shop-org/flexiflow)** - Python 异步引擎，具有结构化日志记录（灵感来自 debug_log.h 模式）
 
-## Contributing
+## 贡献
 
-This toolkit was developed while debugging issue [XRPLF/rippled#6293](https://github.com/XRPLF/rippled/issues/6293).
+该工具包是在调试问题 [XRPLF/rippled#6293](https://github.com/XRPLF/rippled/issues/6293) 时开发的。
 
-Contributions welcome!
+欢迎贡献！
 
-## License
+## 许可证
 
-MIT License — same as rippled.
+MIT 许可证 — 与 rippled 相同。
 
 ---
 
-Built by <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
+构建者：<a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>

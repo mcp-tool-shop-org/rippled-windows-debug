@@ -26,3 +26,7 @@ graph_info.json
 # Crash dumps
 *.dmp
 CrashDumps/
+site/.astro/
+site/dist/
+site/node_modules/
+.polyglot-cache.json
